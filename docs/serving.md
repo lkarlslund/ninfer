@@ -158,7 +158,7 @@ curl http://127.0.0.1:8080/v1/models \
 | `--device N` | CUDA device index | `0` |
 | `--max-request-mib N` | body-size limit before JSON parsing | `384` |
 | `--request-log-jsonl FILE` | append full-precision server/request records | disabled |
-| `--kv-dtype bf16\|int8` | KV-cache storage | `bf16` |
+| `--kv-dtype bf16\|q8\|q4` | KV-cache storage (`int8`/`int4` remain aliases) | `bf16` |
 | `--spec mtp\|dflash` | speculative backend | off |
 | `--draft-tokens N` | MTP `1..5`; DFlash `1..15` | unset |
 | `--lm-head-draft` | optimized proposal head | off |

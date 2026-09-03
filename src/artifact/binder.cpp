@@ -75,6 +75,10 @@ const ObjectDescriptor& Binder::descriptor(ObjectHandle handle) const {
     return reader_.objects()[handle.index];
 }
 
+const ObjectDescriptor* Binder::find(std::string_view name) const noexcept {
+    return reader_.find(name);
+}
+
 PayloadSpan Binder::payload(ObjectHandle handle) const {
     return reader_.payload(descriptor(handle));
 }

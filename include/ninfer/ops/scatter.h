@@ -56,4 +56,14 @@ void scatter(const Tensor& src, const Tensor& indices, Tensor& dst, cudaStream_t
 void extract_bf16_columns(const Tensor& source, std::int32_t source_column, Tensor& destination,
                           cudaStream_t stream);
 
+/**
+ * Exact inverse placement of `extract_bf16_columns`.
+ *
+ * Copies contiguous BF16 source [D',T] into
+ * destination[destination_column:destination_column+D',:] of contiguous
+ * destination [D,T]. Source and destination must not alias.
+ */
+void insert_bf16_columns(const Tensor& source, Tensor& destination,
+                         std::int32_t destination_column, cudaStream_t stream);
+
 } // namespace ninfer::ops

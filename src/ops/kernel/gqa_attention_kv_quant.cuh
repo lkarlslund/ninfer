@@ -20,6 +20,7 @@ namespace ninfer::ops {
 inline constexpr int kGqaKvQuantHeadDim = 256;
 inline constexpr int kGqaKvQuantGroup   = 64;
 inline constexpr int kGqaKvQuantGroups  = kGqaKvQuantHeadDim / kGqaKvQuantGroup;
+inline constexpr int kGqaKvInt4CodeDim  = kGqaKvQuantHeadDim / 2;
 
 __device__ __forceinline__ std::int64_t gqa_kv_quant_code_index(int kv_head, int d, int position,
                                                                 int padded_context) {
@@ -28,12 +29,58 @@ __device__ __forceinline__ std::int64_t gqa_kv_quant_code_index(int kv_head, int
                                                static_cast<std::int64_t>(padded_context) * kv_head);
 }
 
+__device__ __forceinline__ std::int64_t gqa_kv_int4_code_index(
+    int kv_head, int d_pair, int position, int padded_context) {
+    return static_cast<std::int64_t>(d_pair) +
+           static_cast<std::int64_t>(kGqaKvInt4CodeDim) *
+               (static_cast<std::int64_t>(position) +
+                static_cast<std::int64_t>(padded_context) * kv_head);
+}
+
 __device__ __forceinline__ std::int64_t gqa_kv_quant_scale_index(int kv_head, int group,
                                                                  int position, int padded_context) {
     return static_cast<std::int64_t>(group) +
            static_cast<std::int64_t>(kGqaKvQuantGroups) *
                (static_cast<std::int64_t>(position) +
                 static_cast<std::int64_t>(padded_context) * kv_head);
+}
+
+__device__ __forceinline__ std::int8_t gqa_kv_quant_code4(float x, float inv_scale) {
+    if (inv_scale == 0.0f) { return static_cast<std::int8_t>(0); }
+    int q = __float2int_rn(x * inv_scale);
+    q     = max(-7, min(7, q));
+    return static_cast<std::int8_t>(q);
+}
+
+__device__ __forceinline__ std::uint8_t gqa_kv_pack_i4(std::int8_t lo, std::int8_t hi) {
+    return static_cast<std::uint8_t>((static_cast<unsigned>(lo) & 0x0fU) |
+                                     ((static_cast<unsigned>(hi) & 0x0fU) << 4U));
+}
+
+__device__ __forceinline__ std::int8_t gqa_kv_unpack_i4(std::uint8_t packed, bool high) {
+    const unsigned nibble = high ? packed >> 4U : packed & 0x0fU;
+    return static_cast<std::int8_t>(nibble >= 8U ? static_cast<int>(nibble) - 16
+                                                 : static_cast<int>(nibble));
+}
+
+__device__ __forceinline__ int4 gqa_kv_dequant_i4x8(
+    const std::uint8_t* __restrict__ cache, const __half* __restrict__ scale, int kv_head, int d,
+    int position, int padded_context) {
+    const int group = d >> 6;
+    const float s = __half2float(
+        scale[gqa_kv_quant_scale_index(kv_head, group, position, padded_context)]);
+    const std::int64_t off =
+        gqa_kv_int4_code_index(kv_head, d >> 1, position, padded_context);
+    const std::uint32_t raw = load_vec<std::uint32_t>(&cache[off]);
+    const auto* bytes       = reinterpret_cast<const std::uint8_t*>(&raw);
+    unsigned packed[4];
+#pragma unroll
+    for (int i = 0; i < 4; ++i) {
+        packed[i] = pack_bf16x2(static_cast<float>(gqa_kv_unpack_i4(bytes[i], false)) * s,
+                                static_cast<float>(gqa_kv_unpack_i4(bytes[i], true)) * s);
+    }
+    return make_int4(static_cast<int>(packed[0]), static_cast<int>(packed[1]),
+                     static_cast<int>(packed[2]), static_cast<int>(packed[3]));
 }
 
 template <typename Geometry>

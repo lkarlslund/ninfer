@@ -11,6 +11,8 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <iterator>
@@ -142,9 +144,11 @@ std::string channel_text(const PublishedOutput& output, ninfer::OutputChannel ch
     return result;
 }
 
-std::string read_file(const char* path) {
+std::string read_file(const std::filesystem::path& path) {
     std::ifstream stream(path, std::ios::binary);
-    if (!stream) { throw std::runtime_error(std::string("failed to open test resource: ") + path); }
+    if (!stream) {
+        throw std::runtime_error(std::string("failed to open test resource: ") + path.string());
+    }
     return std::string(std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>());
 }
 
@@ -164,12 +168,15 @@ bool throws_invalid_argument(Callable&& callable) {
 }
 
 int test_official_tokenizer_merge() {
-    const std::string tokenizer_json =
-        read_file("/home/neroued/models/llm/qwen/Qwen3.6-27B/base-hf-bf16/tokenizer.json");
-    const std::string tokenizer_config_json =
-        read_file("/home/neroued/models/llm/qwen/Qwen3.6-27B/base-hf-bf16/tokenizer_config.json");
-    const std::string generation_config_json =
-        read_file("/home/neroued/models/llm/qwen/Qwen3.6-27B/base-hf-bf16/generation_config.json");
+    const char* model_root_env = std::getenv("NINFER_QWEN3_6_27B_MODEL");
+    const std::filesystem::path model_root =
+        model_root_env != nullptr
+            ? std::filesystem::path(model_root_env)
+            : std::filesystem::path(
+                  "/home/neroued/models/llm/qwen/Qwen3.6-27B/base-hf-bf16");
+    const std::string tokenizer_json = read_file(model_root / "tokenizer.json");
+    const std::string tokenizer_config_json = read_file(model_root / "tokenizer_config.json");
+    const std::string generation_config_json = read_file(model_root / "generation_config.json");
     const fi::Tokenizer tokenizer({.tokenizer_json         = tokenizer_json,
                                    .tokenizer_config_json  = tokenizer_config_json,
                                    .generation_config_json = generation_config_json});

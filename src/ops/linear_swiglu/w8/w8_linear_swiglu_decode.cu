@@ -13,26 +13,23 @@
 namespace ninfer::ops::detail {
 namespace {
 
-constexpr int kIntermediate = 6144;
-constexpr int kK            = 2048;
-constexpr int kGroupsPerRow = kK / 32;
-
-template <int RowsPerCta>
+template <int Intermediate, int K, int RowsPerCta>
 __global__ __launch_bounds__(RowsPerCta * 32, 2) void w8_linear_swiglu_decode_pair_kernel(
     const __nv_bfloat16* __restrict__ x, const std::uint8_t* __restrict__ codes,
     const std::uint8_t* __restrict__ scales, __nv_bfloat16* __restrict__ out) {
     constexpr int kValuesPerLane  = 8;
     constexpr int kValuesPerPhase = 32 * kValuesPerLane;
     constexpr int kGroupsPerPhase = kValuesPerPhase / 32;
-    constexpr int kPhases         = kK / kValuesPerPhase;
+    constexpr int kPhases         = K / kValuesPerPhase;
+    constexpr int kGroupsPerRow   = K / 32;
     constexpr unsigned kMask      = 0xffffffffu;
 
     const int lane          = static_cast<int>(threadIdx.x) & 31;
     const int warp          = static_cast<int>(threadIdx.x) >> 5;
     const int row           = static_cast<int>(blockIdx.x) * RowsPerCta + warp;
-    const int up_row        = row + kIntermediate;
-    const auto* gate_row    = codes + static_cast<std::int64_t>(row) * kK;
-    const auto* up_codes    = codes + static_cast<std::int64_t>(up_row) * kK;
+    const int up_row        = row + Intermediate;
+    const auto* gate_row    = codes + static_cast<std::int64_t>(row) * K;
+    const auto* up_codes    = codes + static_cast<std::int64_t>(up_row) * K;
     const auto* gate_scales = scales + static_cast<std::int64_t>(row) * kGroupsPerRow * 2;
     const auto* up_scales   = scales + static_cast<std::int64_t>(up_row) * kGroupsPerRow * 2;
 
@@ -87,11 +84,11 @@ __global__ __launch_bounds__(RowsPerCta * 32, 2) void w8_linear_swiglu_decode_pa
     if (lane == 0) { out[row] = __float2bfloat16_rn(silu(gate_acc) * up_acc); }
 }
 
-template <int RowsPerCta>
+template <int Intermediate, int K, int RowsPerCta>
 void launch_decode(const Tensor& x, const Weight& w, Tensor& out, cudaStream_t stream) {
-    static_assert(kIntermediate % RowsPerCta == 0);
-    w8_linear_swiglu_decode_pair_kernel<RowsPerCta>
-        <<<kIntermediate / RowsPerCta, RowsPerCta * 32, 0, stream>>>(
+    static_assert(Intermediate % RowsPerCta == 0);
+    w8_linear_swiglu_decode_pair_kernel<Intermediate, K, RowsPerCta>
+        <<<Intermediate / RowsPerCta, RowsPerCta * 32, 0, stream>>>(
             static_cast<const __nv_bfloat16*>(x.data), static_cast<const std::uint8_t*>(w.qdata),
             static_cast<const std::uint8_t*>(w.scales), static_cast<__nv_bfloat16*>(out.data));
     CUDA_CHECK(cudaGetLastError());
@@ -101,17 +98,22 @@ void launch_decode(const Tensor& x, const Weight& w, Tensor& out, cudaStream_t s
 
 void w8_linear_swiglu_decode_pair_launch(const Tensor& x, const Weight& w, Tensor& out,
                                          cudaStream_t stream) {
-    launch_decode<8>(x, w, out, stream);
+    launch_decode<6144, 2048, 8>(x, w, out, stream);
 }
 
 void w8_linear_swiglu_decode_pair_r4_launch(const Tensor& x, const Weight& w, Tensor& out,
                                             cudaStream_t stream) {
-    launch_decode<4>(x, w, out, stream);
+    launch_decode<6144, 2048, 4>(x, w, out, stream);
 }
 
 void w8_linear_swiglu_decode_pair_r16_launch(const Tensor& x, const Weight& w, Tensor& out,
                                              cudaStream_t stream) {
-    launch_decode<16>(x, w, out, stream);
+    launch_decode<6144, 2048, 16>(x, w, out, stream);
+}
+
+void w8_linear_swiglu_27b_decode_pair_launch(const Tensor& x, const Weight& w, Tensor& out,
+                                             cudaStream_t stream) {
+    launch_decode<17408, 5120, 8>(x, w, out, stream);
 }
 
 } // namespace ninfer::ops::detail

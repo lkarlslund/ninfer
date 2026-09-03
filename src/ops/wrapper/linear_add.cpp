@@ -1,6 +1,9 @@
 #include "ninfer/ops/linear_add.h"
 
+#include "ninfer/ops/linear.h"
+#include "ninfer/ops/residual_add.h"
 #include "ops/linear_add/q5/q5_linear_add_plan.h"
+#include "ops/linear_add/w8/w8_linear_add_kernels.h"
 #include "ops/linear_add/w8/w8_linear_add_plan.h"
 
 #include <cstdint>
@@ -48,6 +51,9 @@ std::size_t linear_add_workspace_bytes(std::int32_t output_rows, std::int32_t in
         (void)detail::w8_linear_add_resolve_plan({output_rows, input_rows, input_rows, max_tokens});
         return 0;
     }
+    if (output_rows == 5120 && (input_rows == 6144 || input_rows == 17408)) {
+        return static_cast<std::size_t>(output_rows) * max_tokens * dtype_size(DType::BF16);
+    }
     return detail::q5_linear_add_capacity_workspace_bytes(output_rows, input_rows, input_rows,
                                                           max_tokens);
 }
@@ -73,7 +79,11 @@ void linear_add(const Tensor& x, const Weight& w, Tensor& residual_out, Workspac
 
     if (w.qtype == QType::W8G32_F16S) {
         require_w8(w);
-        if (w.n != 2048 || (w.k != 4096 && w.k != 6144)) {
+        const bool fused =
+            w.n == 2048 && (w.k == 4096 || w.k == 6144);
+        const bool composed =
+            w.n == 5120 && (w.k == 6144 || w.k == 17408);
+        if (!fused && !composed) {
             throw std::invalid_argument("linear_add: unsupported W8 shape");
         }
         if (!aligned_to(x.data, 16) || !aligned_to(residual_out.data, 16) ||
@@ -81,8 +91,16 @@ void linear_add(const Tensor& x, const Weight& w, Tensor& residual_out, Workspac
             throw std::invalid_argument(
                 "linear_add: W8 requires 16-byte x/residual/code/scale alignment");
         }
-        (void)ws;
-        detail::w8_linear_add_dispatch(x, w, residual_out, stream);
+        if (fused) {
+            detail::w8_linear_add_dispatch(x, w, residual_out, stream);
+        } else if (t == 1) {
+            detail::w8_linear_add_27b_decode_launch(x, w, residual_out, stream);
+        } else {
+            auto scope = ws.scope();
+            Tensor delta = ws.alloc(DType::BF16, {w.n, t});
+            linear(x, w, delta, ws, stream);
+            residual_add(delta, residual_out, stream);
+        }
         return;
     }
 

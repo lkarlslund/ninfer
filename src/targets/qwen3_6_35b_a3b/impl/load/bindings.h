@@ -89,6 +89,7 @@ struct DFlashPlan {
 struct BindingPlan {
     qwen3_6::FrontendResourcePlan frontend;
     qwen3_6::StartupFeatures features;
+    bool q8_weights = false;
     artifact::ObjectHandle token_embedding;
     std::array<TextLayerPlan, kTextLayers> text_layers;
     artifact::ObjectHandle final_norm;

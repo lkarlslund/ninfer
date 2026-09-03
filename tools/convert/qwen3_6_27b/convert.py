@@ -93,6 +93,8 @@ class ConversionPreflight:
     resources: tuple[ResourcePayload, ...]
     draft: draft_head.DraftHeadContext
     object_plan: ObjectPlan
+    object_specs: tuple[inventory.StoredObjectSpec, ...]
+    weight_profile: str
 
 
 def _repo_root() -> Path:
@@ -183,14 +185,20 @@ def load_resources(model_dir: str | Path) -> tuple[ResourcePayload, ...]:
     )
 
 
-def build_object_plan(resources: Mapping[str, bytes]) -> ObjectPlan:
+def build_object_plan(
+    resources: Mapping[str, bytes], weight_profile: str = "native"
+) -> ObjectPlan:
     """Compute every payload-relative object offset for the full inventory."""
 
     preflight_inventory()
-    return family_conversion.build_object_plan(inventory.OBJECT_SPECS, resources)
+    return family_conversion.build_object_plan(
+        inventory.object_specs_for_profile(weight_profile), resources
+    )
 
 
-def preflight_conversion(model_dir: str | Path) -> ConversionPreflight:
+def preflight_conversion(
+    model_dir: str | Path, weight_profile: str = "native"
+) -> ConversionPreflight:
     """Finish all checkpoint, inventory, shortlist, and offset work before writing."""
 
     model = Path(model_dir)
@@ -199,7 +207,8 @@ def preflight_conversion(model_dir: str | Path) -> ConversionPreflight:
     source = recipe.preflight_sources(model)
     resources = load_resources(model)
     resource_map = {resource.name: resource.data for resource in resources}
-    object_plan = build_object_plan(resource_map)
+    object_specs = inventory.object_specs_for_profile(weight_profile)
+    object_plan = build_object_plan(resource_map, weight_profile)
     ranking = _repo_root() / draft_head.DEFAULT_RANKING
     draft = draft_head.compute_shortlist(ranking, model)
     return ConversionPreflight(
@@ -209,6 +218,8 @@ def preflight_conversion(model_dir: str | Path) -> ConversionPreflight:
         resources=resources,
         draft=draft,
         object_plan=object_plan,
+        object_specs=object_specs,
+        weight_profile=weight_profile,
     )
 
 
@@ -291,6 +302,7 @@ def convert(
     out_path: str | Path,
     *,
     device: str | torch.device = "cuda",
+    weight_profile: str = "native",
 ) -> Path:
     """Run the complete registered conversion and return the report path."""
 
@@ -299,7 +311,7 @@ def convert(
     output = Path(out_path)
     requested_device = str(device)
     resolved_device = pick_device(device)
-    preflight = preflight_conversion(model)
+    preflight = preflight_conversion(model, weight_profile)
 
     print(
         f"preflight complete: {len(preflight.object_plan.objects)} objects, "
@@ -316,7 +328,7 @@ def convert(
         ) as writer:
             if writer.objects != preflight.object_plan.objects:
                 raise RuntimeError("writer object plan differs from completed preflight")
-            for index, spec in enumerate(inventory.OBJECT_SPECS, start=1):
+            for index, spec in enumerate(preflight.object_specs, start=1):
                 if isinstance(spec, inventory.ResourceSpec):
                     payload = resources[spec.name]
                 else:
@@ -326,7 +338,7 @@ def convert(
                 writer.write(spec.name, payload)
                 del payload
                 print(
-                    f"[{index}/{len(inventory.OBJECT_SPECS)}] {spec.name}",
+                    f"[{index}/{len(preflight.object_specs)}] {spec.name}",
                     flush=True,
                 )
 
@@ -337,6 +349,7 @@ def convert(
         "model": str(model_dir),
         "out": str(out_path),
         "device": requested_device,
+        "weight_profile": weight_profile,
     }
     report = build_conversion_report(
         model_dir=model,
@@ -366,8 +379,18 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--model", required=True, type=Path)
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--device", default="cuda")
+    parser.add_argument(
+        "--weight-profile",
+        choices=inventory.WEIGHT_PROFILES,
+        default="native",
+    )
     args = parser.parse_args(argv)
-    convert(args.model, args.out, device=args.device)
+    convert(
+        args.model,
+        args.out,
+        device=args.device,
+        weight_profile=args.weight_profile,
+    )
 
 
 if __name__ == "__main__":

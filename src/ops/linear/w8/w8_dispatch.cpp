@@ -21,7 +21,10 @@ W8Launch select_w8_a16_launch(std::int32_t n, std::int32_t k, std::int32_t t) {
             if (t <= 4) { return launch_w8_simt_r8_c4; }
             if (t <= 16) { return launch_w8_simt_r8_c8; }
             return launch_w8_mma_r32_c128;
+        case 4096:
         case 6144:
+        case 7168:
+        case 12288:
             if (t <= 4) { return launch_w8_simt_r8_c4; }
             if (t <= 16) { return launch_w8_simt_r8_c8; }
             return launch_w8_mma_r64_c128;
@@ -29,6 +32,10 @@ W8Launch select_w8_a16_launch(std::int32_t n, std::int32_t k, std::int32_t t) {
         case 34816:
             if (t <= 4) { return launch_w8_simt_r8_c4; }
             if (t <= 8) { return launch_w8_simt_r8_c8; }
+            return launch_w8_mma_r64_c128;
+        case 131072:
+        case 248320:
+            if (t <= 8) { return launch_w8_simt_r8_c4; }
             return launch_w8_mma_r64_c128;
         default:
             break;
@@ -68,6 +75,10 @@ W8Launch select_w8_a16_launch(std::int32_t n, std::int32_t k, std::int32_t t) {
         case 12288:
             if (t <= 16) { return launch_w8_simt_r8_c4; }
             return launch_w8_mma_r64_c128;
+        case 131072:
+        case 248320:
+            if (t <= 8) { return launch_w8_simt_r8_c4; }
+            return launch_w8_mma_r64_c128;
         default:
             break;
         }
@@ -91,6 +102,24 @@ W8Launch select_w8_a16_launch(std::int32_t n, std::int32_t k, std::int32_t t) {
             return launch_w8_mma_r64_c128;
         default:
             break;
+        }
+        break;
+    case 1152:
+        if (n == 1152 || n == 3456 || n == 4304) {
+            if (t <= 16) { return launch_w8_simt_r8_c4; }
+            return launch_w8_mma_r64_c128;
+        }
+        break;
+    case 1536:
+        if (n == 1152) {
+            if (t <= 16) { return launch_w8_simt_r8_c4; }
+            return launch_w8_mma_r64_c128;
+        }
+        break;
+    case 4304:
+        if (n == 1152) {
+            if (t <= 16) { return launch_w8_simt_r8_c4; }
+            return launch_w8_mma_r64_c128;
         }
         break;
     case 16384:

@@ -34,6 +34,7 @@ struct Options {
     std::uint32_t context_tokens   = 128;
     std::uint32_t draft_tokens     = 15;
     ninfer::ProposalHead proposal  = ninfer::ProposalHead::Optimized;
+    ninfer::KvCacheStorage kv_cache = ninfer::KvCacheStorage::BFloat16;
     bool use_cuda_graph            = true;
 };
 
@@ -41,7 +42,8 @@ void print_usage(const char* executable) {
     std::cout << "usage: " << executable
               << " [--artifact <model.ninfer>] [--device <id>] [--context <tokens>]"
                  " [--warmup <n>] [--reps <n>] [--draft-tokens <1..15>]"
-                 " [--proposal-head full|optimized] [--no-cuda-graph]\n";
+                 " [--proposal-head full|optimized] [--kv-dtype bf16|q8|q4]"
+                 " [--no-cuda-graph]\n";
 }
 
 std::uint32_t parse_u32(const char* text, const char* label) {
@@ -83,6 +85,17 @@ Options parse_options(int argc, char** argv) {
                 options.proposal = ninfer::ProposalHead::Optimized;
             } else {
                 throw std::invalid_argument("--proposal-head must be full or optimized");
+            }
+        } else if (argument == "--kv-dtype") {
+            const std::string_view kv(value("--kv-dtype"));
+            if (kv == "bf16") {
+                options.kv_cache = ninfer::KvCacheStorage::BFloat16;
+            } else if (kv == "q8" || kv == "int8") {
+                options.kv_cache = ninfer::KvCacheStorage::Int8Group64;
+            } else if (kv == "q4" || kv == "int4") {
+                options.kv_cache = ninfer::KvCacheStorage::Int4Group64;
+            } else {
+                throw std::invalid_argument("--kv-dtype must be bf16, q8, or q4");
             }
         } else if (argument == "--no-cuda-graph") {
             options.use_cuda_graph = false;
@@ -142,6 +155,18 @@ double mean(const std::vector<T>& values) {
     return std::accumulate(values.begin(), values.end(), 0.0) / static_cast<double>(values.size());
 }
 
+const char* kv_name(ninfer::KvCacheStorage storage) {
+    switch (storage) {
+    case ninfer::KvCacheStorage::BFloat16:
+        return "bf16";
+    case ninfer::KvCacheStorage::Int8Group64:
+        return "q8";
+    case ninfer::KvCacheStorage::Int4Group64:
+        return "q4";
+    }
+    return "unknown";
+}
+
 int run(const Options& options) {
     if (!std::filesystem::exists(options.artifact)) {
         std::cout << "SKIP: artifact not present: " << options.artifact.string() << '\n';
@@ -161,7 +186,7 @@ int run(const Options& options) {
     engine.device                    = options.device;
     engine.max_context               = static_cast<std::uint32_t>(capacity);
     engine.prefill_chunk             = 128;
-    engine.kv_cache                  = ninfer::KvCacheStorage::BFloat16;
+    engine.kv_cache                  = options.kv_cache;
     engine.speculative.backend       = ninfer::SpeculativeBackend::DFlash;
     engine.speculative.draft_tokens  = options.draft_tokens;
     engine.speculative.proposal_head = options.proposal;
@@ -234,6 +259,7 @@ int run(const Options& options) {
     std::cout << "proposal_head,"
               << (options.proposal == ninfer::ProposalHead::Optimized ? "optimized" : "full")
               << '\n';
+    std::cout << "kv_cache," << kv_name(options.kv_cache) << '\n';
     std::cout << "cuda_graph," << (options.use_cuda_graph ? "true" : "false") << '\n';
     std::cout << "warmup," << options.warmup << '\n';
     std::cout << "repetitions," << options.repetitions << '\n';
@@ -247,6 +273,17 @@ int run(const Options& options) {
     std::cout << "acceptance_rate,"
               << (drafted == 0 ? 0.0 : static_cast<double>(accepted) / drafted) << '\n';
     std::cout << "published_tokens_per_second," << 1000.0 * mean_licensed / mean_wall_ms << '\n';
+    std::cout << "round_gpu_ms";
+    for (const auto value : gpu_ms) { std::cout << ',' << value; }
+    std::cout << '\n';
+    std::cout << "round_wall_ms";
+    for (const auto value : wall_ms) { std::cout << ',' << value; }
+    std::cout << '\n';
+    std::cout << "round_licensed_tokens";
+    for (const auto& measurement : measurements) {
+        std::cout << ',' << measurement.licensed_tokens;
+    }
+    std::cout << '\n';
     std::cout << "accepted_per_position";
     for (std::size_t position = 0; position < after.accepted_per_position.size(); ++position) {
         std::cout << ','

@@ -131,7 +131,7 @@ measured recommendation rather than a semantic limit.
 | `--prefill-chunk N` | positive text-prefill chunk, in multiples of 128 | `1024` |
 | `--max-new N` | requested output-token limit | `128` |
 | `--device N` | CUDA device index | `0` |
-| `--kv-dtype bf16\|int8` | KV-cache storage | `bf16` |
+| `--kv-dtype bf16\|q8\|q4` | KV-cache storage (`int8`/`int4` remain aliases) | `bf16` |
 | `--spec mtp\|dflash` | speculative backend | off |
 | `--draft-tokens N` | MTP `1..5`; DFlash `1..15` | unset |
 | `--lm-head-draft` | optimized proposal head | off |
@@ -157,7 +157,9 @@ Run `./build/apps/ninfer --help` for the exact option contract.
 
 Both registered models have a native context limit of 262,144 tokens. The practical allocation on
 one RTX 5090 depends on the selected artifact, media workload, output budget, and KV-cache type.
-Use `--kv-dtype int8` for large context allocations. The prepared prompt must fit
+Use `--kv-dtype q8` or `--kv-dtype q4` for large context allocations. Q8 stores one signed
+code per value; Q4 packs two signed codes per byte. Both use an FP16 scale per 64 values. The
+prepared prompt must fit
 `--max-context`; generation stops at the remaining context capacity when necessary.
 
 All weight, sequence, workspace, and graph allocations are released when the Engine is destroyed.

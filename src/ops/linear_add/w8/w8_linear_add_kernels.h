@@ -12,6 +12,8 @@ void w8_linear_add_decode_r8_launch(const Tensor& x, const Weight& w, Tensor& re
                                     cudaStream_t stream);
 void w8_linear_add_decode_r16_launch(const Tensor& x, const Weight& w, Tensor& residual_out,
                                      cudaStream_t stream);
+void w8_linear_add_27b_decode_launch(const Tensor& x, const Weight& w, Tensor& residual_out,
+                                    cudaStream_t stream);
 void w8_linear_add_simt_r8_c4_launch(bool full, const Tensor& x, const Weight& w,
                                      Tensor& residual_out, cudaStream_t stream);
 void w8_linear_add_simt_r8_c8_launch(bool full, const Tensor& x, const Weight& w,

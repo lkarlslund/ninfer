@@ -443,8 +443,11 @@ std::unique_ptr<SequencePlanImpl> plan_sequence_impl(DeviceContext& device,
     impl->features            = qwen3_6::startup_features(options);
     impl->use_cuda_graph      = options.use_cuda_graph;
     impl->device              = options.device;
-    impl->kv_dtype       = options.kv_cache == KvCacheStorage::BFloat16 ? DType::BF16 : DType::I8;
-    impl->kv_quant_group = impl->kv_dtype == DType::I8 ? kKvQuantGroup : 0;
+    impl->kv_dtype = options.kv_cache == KvCacheStorage::BFloat16
+                         ? DType::BF16
+                         : (options.kv_cache == KvCacheStorage::Int8Group64 ? DType::I8
+                                                                           : DType::U8);
+    impl->kv_quant_group = impl->kv_dtype == DType::BF16 ? 0 : kKvQuantGroup;
     impl->persistent     = persistent_layout(*impl);
     const auto [dflash_workspace, fixed_workspace_bytes] = dflash_workspace_layout(*impl);
     impl->dflash_workspace                               = dflash_workspace;

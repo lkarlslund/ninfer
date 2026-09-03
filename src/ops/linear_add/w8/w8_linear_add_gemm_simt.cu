@@ -12,23 +12,21 @@ namespace {
 
 constexpr int kRowsPerBlock = 8;
 constexpr int kStages       = 2;
-constexpr int kDecodeK      = 6144;
-constexpr int kDecodeGroups = kDecodeK / 32;
-
-template <int RowsPerCta>
+template <int Rows, int K, int RowsPerCta>
 __global__ __launch_bounds__(RowsPerCta * 32, 2) void w8_linear_add_decode_kernel(
     const __nv_bfloat16* __restrict__ x, const std::uint8_t* __restrict__ codes,
     const std::uint8_t* __restrict__ scales, __nv_bfloat16* __restrict__ residual) {
     constexpr int kValuesPerLane  = 8;
     constexpr int kValuesPerPhase = 32 * kValuesPerLane;
     constexpr int kGroupsPerPhase = kValuesPerPhase / 32;
-    constexpr int kPhases         = kDecodeK / kValuesPerPhase;
+    constexpr int kPhases         = K / kValuesPerPhase;
+    constexpr int kDecodeGroups   = K / 32;
     constexpr unsigned kMask      = 0xffffffffu;
 
     const int lane       = static_cast<int>(threadIdx.x) & 31;
     const int warp       = static_cast<int>(threadIdx.x) >> 5;
     const int row        = static_cast<int>(blockIdx.x) * RowsPerCta + warp;
-    const auto* code_row = codes + static_cast<std::int64_t>(row) * kDecodeK;
+    const auto* code_row = codes + static_cast<std::int64_t>(row) * K;
     const auto* scale_row =
         scales + static_cast<std::int64_t>(row) * kDecodeGroups * sizeof(std::uint16_t);
 
@@ -70,10 +68,11 @@ __global__ __launch_bounds__(RowsPerCta * 32, 2) void w8_linear_add_decode_kerne
     if (lane == 0) { residual[row] = __float2bfloat16_rn(__bfloat162float(residual[row]) + acc); }
 }
 
-template <int RowsPerCta>
+template <int Rows, int K, int RowsPerCta>
 void launch_decode(const Tensor& x, const Weight& w, Tensor& residual_out, cudaStream_t stream) {
-    static_assert((2048 % RowsPerCta) == 0);
-    w8_linear_add_decode_kernel<RowsPerCta><<<2048 / RowsPerCta, RowsPerCta * 32, 0, stream>>>(
+    static_assert((Rows % RowsPerCta) == 0);
+    w8_linear_add_decode_kernel<Rows, K, RowsPerCta>
+        <<<Rows / RowsPerCta, RowsPerCta * 32, 0, stream>>>(
         static_cast<const __nv_bfloat16*>(x.data), static_cast<const std::uint8_t*>(w.qdata),
         static_cast<const std::uint8_t*>(w.scales), static_cast<__nv_bfloat16*>(residual_out.data));
     CUDA_CHECK(cudaGetLastError());
@@ -116,17 +115,28 @@ void launch_variant(bool full, const Tensor& x, const Weight& w, Tensor& residua
 
 void w8_linear_add_decode_r4_launch(const Tensor& x, const Weight& w, Tensor& residual_out,
                                     cudaStream_t stream) {
-    launch_decode<4>(x, w, residual_out, stream);
+    launch_decode<2048, 6144, 4>(x, w, residual_out, stream);
 }
 
 void w8_linear_add_decode_r8_launch(const Tensor& x, const Weight& w, Tensor& residual_out,
                                     cudaStream_t stream) {
-    launch_decode<8>(x, w, residual_out, stream);
+    launch_decode<2048, 6144, 8>(x, w, residual_out, stream);
 }
 
 void w8_linear_add_decode_r16_launch(const Tensor& x, const Weight& w, Tensor& residual_out,
                                      cudaStream_t stream) {
-    launch_decode<16>(x, w, residual_out, stream);
+    launch_decode<2048, 6144, 16>(x, w, residual_out, stream);
+}
+
+void w8_linear_add_27b_decode_launch(const Tensor& x, const Weight& w, Tensor& residual_out,
+                                    cudaStream_t stream) {
+    if (w.k == 6144) {
+        launch_decode<5120, 6144, 8>(x, w, residual_out, stream);
+    } else if (w.k == 17408) {
+        launch_decode<5120, 17408, 8>(x, w, residual_out, stream);
+    } else {
+        throw std::invalid_argument("27B W8 linear_add decode requires K=6144 or K=17408");
+    }
 }
 
 void w8_linear_add_simt_r8_c4_launch(bool full, const Tensor& x, const Weight& w,

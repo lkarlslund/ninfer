@@ -1,6 +1,7 @@
 #include "targets/qwen3_6_27b/impl/variant.h"
 
 #include "ninfer/ops/attn_input_proj.h"
+#include "ninfer/ops/causal_conv1d_silu.h"
 #include "ninfer/ops/gdn_gating_proj.h"
 #include "ninfer/ops/gdn_input_proj.h"
 #include "ninfer/ops/linear.h"
@@ -9,6 +10,7 @@
 #include "ninfer/ops/linear_swiglu.h"
 #include "ninfer/ops/mtp_pack.h"
 #include "ninfer/ops/residual_add.h"
+#include "ninfer/ops/scatter.h"
 #include "ninfer/ops/silu_mul.h"
 
 #include <algorithm>
@@ -20,6 +22,23 @@
 
 namespace ninfer::targets::qwen3_6_27b::detail {
 namespace {
+
+Weight w8_row_view(const Weight& parent, std::int32_t row_begin, std::int32_t row_count) {
+    if (parent.qtype != QType::W8G32_F16S || parent.layout != QuantLayout::RowSplit ||
+        row_begin < 0 || row_count <= 0 || row_begin + row_count > parent.n) {
+        throw std::invalid_argument("27B Q8 row view is invalid");
+    }
+    const std::uint64_t groups = static_cast<std::uint64_t>(parent.padded_shape[1] / 32);
+    Weight out                 = parent;
+    out.qdata = static_cast<const std::byte*>(parent.qdata) +
+                static_cast<std::uint64_t>(row_begin) * groups * 32;
+    out.scales = static_cast<const std::byte*>(parent.scales) +
+                 static_cast<std::uint64_t>(row_begin) * groups * 2;
+    out.n               = row_count;
+    out.shape[0]        = row_count;
+    out.padded_shape[0] = row_count;
+    return out;
+}
 
 std::vector<GraphFrontierRange>
 graph_ranges_through(std::uint32_t max_frontier, const std::vector<std::uint32_t>& preferred_ends) {
@@ -94,6 +113,19 @@ void Variant::attention_projection(const Tensor& hidden,
                                    const FullAttentionProjectionWeights& weights, Tensor& query,
                                    Tensor& gate, Tensor& key, Tensor& value,
                                    WorkspaceArena& workspace, cudaStream_t stream) {
+    if (weights.query_key.qtype == QType::W8G32_F16S) {
+        ops::linear(hidden, w8_row_view(weights.query_key, 0, TextConfig::query_size), query,
+                    workspace, stream);
+        ops::linear(hidden,
+                    w8_row_view(weights.query_key, TextConfig::query_size, TextConfig::kv_size), key,
+                    workspace, stream);
+        ops::linear(hidden, w8_row_view(weights.gate_value, 0, TextConfig::query_size), gate,
+                    workspace, stream);
+        ops::linear(hidden,
+                    w8_row_view(weights.gate_value, TextConfig::query_size, TextConfig::kv_size),
+                    value, workspace, stream);
+        return;
+    }
     ops::attn_input_proj(hidden, weights.query_key, weights.gate_value, query, gate, key, value,
                          workspace, stream);
 }
@@ -129,6 +161,20 @@ void Variant::mtp_q_gate_projection(const Tensor& hidden,
 void Variant::gdn_input_projection(const Tensor& hidden, const GdnProjectionWeights& weights,
                                    Tensor& qkv, Tensor& output_gate, WorkspaceArena& workspace,
                                    cudaStream_t stream) {
+    if (weights.query_key.qtype == QType::W8G32_F16S) {
+        const int tokens = hidden.ne[1];
+        auto scope = workspace.scope();
+        Tensor query_key = workspace.alloc(DType::BF16, {2 * TextConfig::key_dim, tokens});
+        Tensor projected_value =
+            workspace.alloc(DType::BF16, {TextConfig::value_dim, tokens});
+        ops::linear(hidden, weights.query_key, query_key, workspace, stream);
+        ops::linear(hidden, weights.value, projected_value, workspace, stream);
+        Tensor output_gate_flat = output_gate.view({TextConfig::value_dim, tokens});
+        ops::linear(hidden, weights.z, output_gate_flat, workspace, stream);
+        ops::insert_bf16_columns(query_key, qkv, 0, stream);
+        ops::insert_bf16_columns(projected_value, qkv, 2 * TextConfig::key_dim, stream);
+        return;
+    }
     (void)output_gate;
     ops::gdn_input_proj(hidden, weights.query_key, weights.value, qkv, workspace, stream);
 }
@@ -139,6 +185,29 @@ void Variant::gdn_input_projection_snapshot(const Tensor& hidden,
                                             const Tensor& initial_slot, Tensor& query, Tensor& key,
                                             Tensor& value, Tensor& output_gate,
                                             WorkspaceArena& workspace, cudaStream_t stream) {
+    if (weights.query_key.qtype == QType::W8G32_F16S) {
+        auto scope = workspace.scope();
+        const int tokens = hidden.ne[1];
+        Tensor query_key = workspace.alloc(DType::BF16, {2 * TextConfig::key_dim, tokens});
+        Tensor projected_value =
+            workspace.alloc(DType::BF16, {TextConfig::value_dim, tokens});
+        Tensor projected =
+            workspace.alloc(DType::BF16, {2 * TextConfig::key_dim + TextConfig::value_dim, tokens});
+        Tensor convolved =
+            workspace.alloc(DType::BF16, {2 * TextConfig::key_dim + TextConfig::value_dim, tokens});
+        ops::linear(hidden, weights.query_key, query_key, workspace, stream);
+        ops::linear(hidden, weights.value, projected_value, workspace, stream);
+        Tensor output_gate_flat = output_gate.view({TextConfig::value_dim, tokens});
+        ops::linear(hidden, weights.z, output_gate_flat, workspace, stream);
+        ops::insert_bf16_columns(query_key, projected, 0, stream);
+        ops::insert_bf16_columns(projected_value, projected, 2 * TextConfig::key_dim, stream);
+        ops::causal_conv1d_silu_snapshot(projected, conv_weight, conv_states, initial_slot,
+                                         convolved, stream);
+        ops::extract_bf16_columns(convolved, 0, query, stream);
+        ops::extract_bf16_columns(convolved, TextConfig::key_dim, key, stream);
+        ops::extract_bf16_columns(convolved, 2 * TextConfig::key_dim, value, stream);
+        return;
+    }
     (void)output_gate;
     ops::gdn_input_proj_conv_snapshot(hidden, weights.query_key, weights.value, conv_weight,
                                       conv_states, initial_slot, query, key, value, workspace,
@@ -194,13 +263,27 @@ std::size_t Variant::mtp_kv_workspace_bytes(std::int32_t) { return 0; }
 std::size_t Variant::mtp_q_gate_workspace_bytes(std::int32_t) { return 0; }
 
 std::size_t Variant::gdn_input_projection_workspace_bytes(std::int32_t tokens) {
-    return ops::gdn_input_proj_workspace_bytes(2 * TextConfig::key_dim, TextConfig::value_dim,
-                                               tokens);
+    WorkspaceLayoutBuilder layout;
+    (void)layout.alloc(DType::BF16, {2 * TextConfig::key_dim, tokens});
+    (void)layout.alloc(DType::BF16, {TextConfig::value_dim, tokens});
+    const std::size_t q8_bytes = layout.peak_bytes();
+    const std::size_t native_bytes =
+        ops::gdn_input_proj_workspace_bytes(2 * TextConfig::key_dim, TextConfig::value_dim, tokens);
+    return std::max(q8_bytes, native_bytes);
 }
 
 std::size_t Variant::gdn_input_projection_snapshot_workspace_bytes(std::int32_t tokens) {
-    return ops::gdn_input_proj_conv_snapshot_workspace_bytes(
+    WorkspaceLayoutBuilder layout;
+    (void)layout.alloc(DType::BF16, {2 * TextConfig::key_dim, tokens});
+    (void)layout.alloc(DType::BF16, {TextConfig::value_dim, tokens});
+    (void)layout.alloc(DType::BF16,
+                       {2 * TextConfig::key_dim + TextConfig::value_dim, tokens});
+    (void)layout.alloc(DType::BF16,
+                       {2 * TextConfig::key_dim + TextConfig::value_dim, tokens});
+    const std::size_t q8_bytes = layout.peak_bytes();
+    const std::size_t native_bytes = ops::gdn_input_proj_conv_snapshot_workspace_bytes(
         TextConfig::key_dim, TextConfig::key_dim, TextConfig::value_dim, tokens);
+    return std::max(q8_bytes, native_bytes);
 }
 
 std::size_t Variant::gdn_norm_control_projection_workspace_bytes(std::int32_t tokens) {

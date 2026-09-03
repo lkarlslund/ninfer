@@ -10,6 +10,7 @@ artifacts, and run the CLI or HTTP server.
 | [CLI](cli.md) | text, chat-history, image/video input, output streams, sampling, MTP, and common runtime options |
 | [HTTP serving](serving.md) | OpenAI Chat Completions, Anthropic Messages, streaming, token counting, authentication, and tool calls |
 | [Performance](performance.md) | RTX 5090 results, MTP-on/off measurements, llama.cpp comparison, and reproduction commands |
+| [Q8 weights and KV cache](q8-and-kv.md) | Q8 conversion, Q4/Q8/BF16 cache modes, and structured benchmark reports |
 | [CLI examples](../examples/cli/) | committed text, multimodal, thinking, long-decode, and long-context inputs |
 
 The executable `--help` output is the exact source for command-line option spelling and defaults.
@@ -23,6 +24,8 @@ The executable `--help` output is the exact source for command-line option spell
 
 ## Repository-local guides
 
+- [Q8 weights and KV-cache profiles](q8-and-kv.md)
+- [Original mixed quantization versus llama.cpp Q4_K_M](q4-comparison.md)
 - [Benchmarks](../bench/README.md)
 - [Tests](../tests/README.md)
 - [Maintainer tools](../tools/README.md)

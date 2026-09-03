@@ -79,11 +79,11 @@ __device__ __forceinline__ int4 gqa_prefill_i8_dequant_f16x8(const std::int8_t* 
 
 // Eight independent quantization units per CTA; one warp owns one
 // (token, kv_head, 64-d group), with two dimensions per lane.
-template <typename Geometry>
+template <typename Geometry, bool Int4>
 __launch_bounds__(256) __global__ void gqa_attention_prefill_fill_i8_kernel(
     const __nv_bfloat16* __restrict__ k, const __nv_bfloat16* __restrict__ v,
-    const std::int32_t* __restrict__ positions, std::int8_t* __restrict__ cache_k,
-    std::int8_t* __restrict__ cache_v, __half* __restrict__ scale_k, __half* __restrict__ scale_v,
+    const std::int32_t* __restrict__ positions, std::uint8_t* __restrict__ cache_k,
+    std::uint8_t* __restrict__ cache_v, __half* __restrict__ scale_k, __half* __restrict__ scale_v,
     std::int32_t tokens, std::int32_t padded_context) {
     constexpr int Warps         = 8;
     constexpr unsigned FullMask = 0xffffffffu;
@@ -113,21 +113,52 @@ __launch_bounds__(256) __global__ void gqa_attention_prefill_fill_i8_kernel(
     k_abs       = warp_max(k_abs, FullMask);
     v_abs       = warp_max(v_abs, FullMask);
 
-    const __half ksh = __float2half_rn(k_abs > 0.0f ? k_abs / 127.0f : 0.0f);
-    const __half vsh = __float2half_rn(v_abs > 0.0f ? v_abs / 127.0f : 0.0f);
+    const float divisor = Int4 ? 7.0f : 127.0f;
+    const __half ksh = __float2half_rn(k_abs > 0.0f ? k_abs / divisor : 0.0f);
+    const __half vsh = __float2half_rn(v_abs > 0.0f ? v_abs / divisor : 0.0f);
     const float ks   = __half2float(ksh);
     const float vs   = __half2float(vsh);
     const float kinv = ks > 0.0f ? 1.0f / ks : 0.0f;
     const float vinv = vs > 0.0f ? 1.0f / vs : 0.0f;
 
-    cache_k[gqa_kv_quant_code_index(kv_head, d0, position, padded_context)] =
-        gqa_kv_quant_code(k0, kinv);
-    cache_k[gqa_kv_quant_code_index(kv_head, d1, position, padded_context)] =
-        gqa_kv_quant_code(k1, kinv);
-    cache_v[gqa_kv_quant_code_index(kv_head, d0, position, padded_context)] =
-        gqa_kv_quant_code(v0, vinv);
-    cache_v[gqa_kv_quant_code_index(kv_head, d1, position, padded_context)] =
-        gqa_kv_quant_code(v1, vinv);
+    if constexpr (Int4) {
+        const int pair_lane = 2 * (lane & 15);
+        const float k0lo = __shfl_sync(FullMask, k0, pair_lane);
+        const float k0hi = __shfl_sync(FullMask, k0, pair_lane + 1);
+        const float k1lo = __shfl_sync(FullMask, k1, pair_lane);
+        const float k1hi = __shfl_sync(FullMask, k1, pair_lane + 1);
+        const float v0lo = __shfl_sync(FullMask, v0, pair_lane);
+        const float v0hi = __shfl_sync(FullMask, v0, pair_lane + 1);
+        const float v1lo = __shfl_sync(FullMask, v1, pair_lane);
+        const float v1hi = __shfl_sync(FullMask, v1, pair_lane + 1);
+        if (lane < 16) {
+            const int low_d = group * kGqaKvQuantGroup + 2 * lane;
+            const int high_d = low_d + 32;
+            const auto low_off =
+                gqa_kv_int4_code_index(kv_head, low_d >> 1, position, padded_context);
+            const auto high_off =
+                gqa_kv_int4_code_index(kv_head, high_d >> 1, position, padded_context);
+            cache_k[low_off] = gqa_kv_pack_i4(gqa_kv_quant_code4(k0lo, kinv),
+                                               gqa_kv_quant_code4(k0hi, kinv));
+            cache_k[high_off] = gqa_kv_pack_i4(gqa_kv_quant_code4(k1lo, kinv),
+                                                gqa_kv_quant_code4(k1hi, kinv));
+            cache_v[low_off] = gqa_kv_pack_i4(gqa_kv_quant_code4(v0lo, vinv),
+                                               gqa_kv_quant_code4(v0hi, vinv));
+            cache_v[high_off] = gqa_kv_pack_i4(gqa_kv_quant_code4(v1lo, vinv),
+                                                gqa_kv_quant_code4(v1hi, vinv));
+        }
+    } else {
+        auto* k_i8 = reinterpret_cast<std::int8_t*>(cache_k);
+        auto* v_i8 = reinterpret_cast<std::int8_t*>(cache_v);
+        k_i8[gqa_kv_quant_code_index(kv_head, d0, position, padded_context)] =
+            gqa_kv_quant_code(k0, kinv);
+        k_i8[gqa_kv_quant_code_index(kv_head, d1, position, padded_context)] =
+            gqa_kv_quant_code(k1, kinv);
+        v_i8[gqa_kv_quant_code_index(kv_head, d0, position, padded_context)] =
+            gqa_kv_quant_code(v0, vinv);
+        v_i8[gqa_kv_quant_code_index(kv_head, d1, position, padded_context)] =
+            gqa_kv_quant_code(v1, vinv);
+    }
     if (lane == 0) {
         const std::int64_t scale_off =
             gqa_kv_quant_scale_index(kv_head, group, position, padded_context);
@@ -136,10 +167,10 @@ __launch_bounds__(256) __global__ void gqa_attention_prefill_fill_i8_kernel(
     }
 }
 
-template <typename Geometry>
+template <typename Geometry, bool Int4>
 __global__ __maxnreg__(120) void gqa_attention_prefill_i8_kernel(
-    const __nv_bfloat16* __restrict__ q, const std::int8_t* __restrict__ cache_k,
-    const std::int8_t* __restrict__ cache_v, const __half* __restrict__ cache_k_scale,
+    const __nv_bfloat16* __restrict__ q, const std::uint8_t* __restrict__ cache_k,
+    const std::uint8_t* __restrict__ cache_v, const __half* __restrict__ cache_k_scale,
     const __half* __restrict__ cache_v_scale, const std::int32_t* __restrict__ positions,
     float scale, __nv_bfloat16* __restrict__ out, std::int32_t tokens,
     std::int32_t padded_context) {
@@ -237,9 +268,25 @@ __global__ __maxnreg__(120) void gqa_attention_prefill_i8_kernel(
             std::int8_t* kd = &k_i8[(key_l * DB16 + gqa_prefill_swz(key_l, dc * 8)) * 2];
             std::int8_t* vd = &v_i8[key_l * D + d];
             if (key <= max_query_abs) {
-                const std::int64_t off = gqa_kv_quant_code_index(kv_head, d, key, padded_context);
-                cp_async<16, Cache::cg>(kd, &cache_k[off]);
-                cp_async<16, Cache::cg>(vd, &cache_v[off]);
+                if constexpr (Int4) {
+#pragma unroll
+                    for (int i = 0; i < 16; ++i) {
+                        const int dim = d + i;
+                        const auto off = gqa_kv_int4_code_index(
+                            kv_head, dim >> 1, key, padded_context);
+                        gqa_prefill_i8_store_swz(
+                            k_i8, key_l, dim,
+                            gqa_kv_unpack_i4(cache_k[off], (dim & 1) != 0));
+                        vd[i] = gqa_kv_unpack_i4(cache_v[off], (dim & 1) != 0);
+                    }
+                } else {
+                    const std::int64_t off =
+                        gqa_kv_quant_code_index(kv_head, d, key, padded_context);
+                    cp_async<16, Cache::cg>(
+                        kd, reinterpret_cast<const std::int8_t*>(cache_k) + off);
+                    cp_async<16, Cache::cg>(
+                        vd, reinterpret_cast<const std::int8_t*>(cache_v) + off);
+                }
             } else {
                 store_vec(kd, make_int4(0, 0, 0, 0));
                 store_vec(vd, make_int4(0, 0, 0, 0));

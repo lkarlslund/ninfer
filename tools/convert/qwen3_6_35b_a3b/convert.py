@@ -163,6 +163,8 @@ class ConversionPreflight:
     resources: tuple[ResourcePayload, ...]
     draft: draft_head.DraftHeadContext
     object_plan: ObjectPlan
+    object_specs: tuple[inventory.StoredObjectSpec, ...]
+    weight_profile: str
 
 
 def _repo_root() -> Path:
@@ -323,13 +325,18 @@ def load_resources(model_dir: str | Path) -> tuple[ResourcePayload, ...]:
     )
 
 
-def build_object_plan(resources: Mapping[str, bytes]) -> ObjectPlan:
-    return family_conversion.build_object_plan(inventory.OBJECT_SPECS, resources)
+def build_object_plan(
+    resources: Mapping[str, bytes], weight_profile: str = "native"
+) -> ObjectPlan:
+    return family_conversion.build_object_plan(
+        inventory.object_specs_for_profile(weight_profile), resources
+    )
 
 
 def preflight_conversion(
     model_dir: str | Path,
     dflash_model_dir: str | Path,
+    weight_profile: str = "native",
 ) -> ConversionPreflight:
     """Complete config, source, shortlist, and offset work before writing."""
 
@@ -347,7 +354,8 @@ def preflight_conversion(
 
     resources = load_resources(model)
     resource_map = {resource.name: resource.data for resource in resources}
-    object_plan = build_object_plan(resource_map)
+    object_specs = inventory.object_specs_for_profile(weight_profile)
+    object_plan = build_object_plan(resource_map, weight_profile)
 
     ranking = _repo_root() / draft_head.DEFAULT_RANKING
     draft = draft_head.compute_shortlist(ranking, model)
@@ -361,6 +369,8 @@ def preflight_conversion(
         resources=resources,
         draft=draft,
         object_plan=object_plan,
+        object_specs=object_specs,
+        weight_profile=weight_profile,
     )
 
 
@@ -506,6 +516,7 @@ def convert(
     out_path: str | Path,
     *,
     device: str | torch.device = "cuda",
+    weight_profile: str = "native",
 ) -> Path:
     """Run the complete target conversion and return its report path."""
 
@@ -515,7 +526,7 @@ def convert(
     requested_device = str(device)
     resolved_device = pick_device(device)
     dflash_model = Path(dflash_model_dir)
-    preflight = preflight_conversion(model, dflash_model)
+    preflight = preflight_conversion(model, dflash_model, weight_profile)
 
     print(
         f"preflight complete: {len(preflight.object_plan.objects)} objects, "
@@ -538,14 +549,15 @@ def convert(
             writer.write(spec.name, payload)
             index += 1
             print(
-                f"[{index}/{len(inventory.OBJECT_SPECS)}] {spec.name}",
+                f"[{index}/{len(preflight.object_specs)}] {spec.name}",
                 flush=True,
             )
 
         for spec in inventory.RESOURCE_SPECS:
             write_payload(spec, resources[spec.name])
 
-        base_specs = inventory.TENSOR_SPECS[
+        tensor_specs = preflight.object_specs[len(inventory.RESOURCE_SPECS) :]
+        base_specs = tensor_specs[
             : -len(inventory.DFLASH_TENSOR_SPECS)
         ]
         with ShardReader.from_index(
@@ -566,7 +578,7 @@ def convert(
         with ShardReader.from_file(
             dflash_model / "model.safetensors"
         ) as reader:
-            for spec in inventory.DFLASH_TENSOR_SPECS:
+            for spec in tensor_specs[-len(inventory.DFLASH_TENSOR_SPECS) :]:
                 tensor = materialize_tensor(
                     spec,
                     reader,
@@ -586,6 +598,7 @@ def convert(
         "dflash_model": str(dflash_model_dir),
         "out": str(out_path),
         "device": requested_device,
+        "weight_profile": weight_profile,
     }
     report = build_conversion_report(
         model_dir=model,
@@ -619,12 +632,18 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--dflash-model", required=True, type=Path)
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--device", default="cuda")
+    parser.add_argument(
+        "--weight-profile",
+        choices=inventory.WEIGHT_PROFILES,
+        default="native",
+    )
     args = parser.parse_args(argv)
     convert(
         args.model,
         args.dflash_model,
         args.out,
         device=args.device,
+        weight_profile=args.weight_profile,
     )
 
 

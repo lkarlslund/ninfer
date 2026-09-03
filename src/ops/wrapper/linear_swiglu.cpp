@@ -1,6 +1,9 @@
 #include "ninfer/ops/linear_swiglu.h"
 
+#include "ninfer/ops/linear.h"
+#include "ninfer/ops/silu_mul.h"
 #include "ops/linear_swiglu/q4/q4_linear_swiglu_plan.h"
+#include "ops/linear_swiglu/w8/w8_linear_swiglu_kernels.h"
 #include "ops/linear_swiglu/w8/w8_linear_swiglu_plan.h"
 
 #include <cstdint>
@@ -20,6 +23,9 @@ std::size_t linear_swiglu_workspace_bytes(std::int32_t gate_up_rows, std::int32_
         (void)detail::w8_linear_swiglu_resolve_plan({12288, 6144, 2048, 2048, max_tokens});
         return 0;
     }
+    if (gate_up_rows == 34816) {
+        return static_cast<std::size_t>(gate_up_rows) * max_tokens * dtype_size(DType::BF16);
+    }
     return detail::q4_linear_swiglu_capacity_workspace_bytes(gate_up_rows, gate_up_rows / 2, 5120,
                                                              5120, max_tokens);
 }
@@ -33,11 +39,16 @@ void linear_swiglu(const Tensor& x, const Weight& gate_up_weight, Tensor& out, W
     const bool q4_shape  = x.ne[0] == 5120 && out.ne[0] == 17408 && gate_up_weight.n == 34816 &&
                           gate_up_weight.k == 5120 && gate_up_weight.padded_shape[0] == 34816 &&
                           gate_up_weight.padded_shape[1] == 5120;
-    const bool w8_shape = x.ne[0] == 2048 && out.ne[0] == 6144 && gate_up_weight.n == 12288 &&
-                          gate_up_weight.k == 2048 && gate_up_weight.padded_shape[0] == 12288 &&
-                          gate_up_weight.padded_shape[1] == 2048;
+    const bool w8_fused_shape =
+        x.ne[0] == 2048 && out.ne[0] == 6144 && gate_up_weight.n == 12288 &&
+        gate_up_weight.k == 2048 && gate_up_weight.padded_shape[0] == 12288 &&
+        gate_up_weight.padded_shape[1] == 2048;
+    const bool w8_composed_shape =
+        x.ne[0] == 5120 && out.ne[0] == 17408 && gate_up_weight.n == 34816 &&
+        gate_up_weight.k == 5120 && gate_up_weight.padded_shape[0] == 34816 &&
+        gate_up_weight.padded_shape[1] == 5120;
     if (t <= 0 || x.ne[2] != 1 || x.ne[3] != 1 || out.ne[1] != t || out.ne[2] != 1 ||
-        out.ne[3] != 1 || (!q4_shape && !w8_shape)) {
+        out.ne[3] != 1 || (!q4_shape && !w8_fused_shape && !w8_composed_shape)) {
         throw std::invalid_argument("linear_swiglu: invalid tensor shape");
     }
     if (!x.is_contiguous() || !out.is_contiguous()) {
@@ -54,7 +65,8 @@ void linear_swiglu(const Tensor& x, const Weight& gate_up_weight, Tensor& out, W
                                gate_up_weight.qdata != nullptr && gate_up_weight.scales != nullptr;
     const bool q4_weight = q4_shape && gate_up_weight.qtype == QType::Q4G64_F16S &&
                            gate_up_weight.group_size == 64 && gate_up_weight.group == 64;
-    const bool w8_weight = w8_shape && gate_up_weight.qtype == QType::W8G32_F16S &&
+    const bool w8_weight = (w8_fused_shape || w8_composed_shape) &&
+                           gate_up_weight.qtype == QType::W8G32_F16S &&
                            gate_up_weight.group_size == 32 && gate_up_weight.group == 32 &&
                            gate_up_weight.qhigh == nullptr && gate_up_weight.high_plane_bytes == 0;
     if (!common_weight || (!q4_weight && !w8_weight)) {
@@ -68,8 +80,17 @@ void linear_swiglu(const Tensor& x, const Weight& gate_up_weight, Tensor& out, W
     }
 
     if (w8_weight) {
-        (void)ws;
-        detail::w8_linear_swiglu_dispatch(x, gate_up_weight, out, stream);
+        if (w8_fused_shape) {
+            detail::w8_linear_swiglu_dispatch(x, gate_up_weight, out, stream);
+        } else if (t == 1) {
+            detail::w8_linear_swiglu_27b_decode_pair_launch(x, gate_up_weight, out, stream);
+        } else {
+            auto scope = ws.scope();
+            Tensor packed = ws.alloc(DType::BF16, {gate_up_weight.n, t});
+            linear(x, gate_up_weight, packed, ws, stream);
+            silu_mul(packed.slice(0, 0, out.ne[0]),
+                     packed.slice(0, out.ne[0], out.ne[0]), out, stream);
+        }
     } else {
         detail::q4_linear_swiglu_dispatch(x, gate_up_weight, out, ws, stream);
     }

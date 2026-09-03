@@ -93,7 +93,8 @@ struct VisionWeights {
 };
 
 [[nodiscard]] VisionBackbonePlan bind_vision_backbone(artifact::Binder& binder,
-                                                      artifact::TensorPlacement placement);
+                                                      artifact::TensorPlacement placement,
+                                                      bool q8_weights = false);
 [[nodiscard]] VisionMergerInputPlan bind_vision_merger_input(artifact::Binder& binder,
                                                              artifact::TensorPlacement placement);
 [[nodiscard]] VisionMergerNormPlan bind_vision_merger_norm(artifact::Binder& binder,
@@ -101,6 +102,7 @@ struct VisionWeights {
 
 [[nodiscard]] VisionCommonWeights materialize_vision_common(
     const artifact::MaterializedArtifact& materialized, const VisionBackbonePlan& backbone,
-    const VisionMergerInputPlan& merger_input, const VisionMergerNormPlan& merger_norm);
+    const VisionMergerInputPlan& merger_input, const VisionMergerNormPlan& merger_norm,
+    bool q8_weights = false);
 
 } // namespace ninfer::targets::qwen3_6

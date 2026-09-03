@@ -9,6 +9,7 @@
 namespace ninfer {
 
 inline constexpr std::int32_t kKvQuantGroup = 64;
+inline constexpr std::int32_t kKvInt4Pack   = 2;
 
 struct KVCacheLayerView {
     Tensor k;

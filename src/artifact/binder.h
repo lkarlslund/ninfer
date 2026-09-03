@@ -46,6 +46,7 @@ public:
     ObjectHandle require_resource(std::string_view name, ResourceEncoding encoding);
 
     const ObjectDescriptor& descriptor(ObjectHandle handle) const;
+    const ObjectDescriptor* find(std::string_view name) const noexcept;
     PayloadSpan payload(ObjectHandle handle) const;
     void materialize_on_device(ObjectHandle handle);
     void retain_on_host(ObjectHandle handle);

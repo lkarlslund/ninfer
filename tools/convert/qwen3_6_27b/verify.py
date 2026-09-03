@@ -148,10 +148,19 @@ def validate_structure(artifact: Artifact) -> StructureSummary:
         _contract_error(
             f"model_id is {artifact.model_id!r}, expected {inventory.MODEL_ID!r}"
         )
-    if len(artifact.objects) != len(inventory.OBJECT_SPECS):
+    embedding = next(
+        (obj for obj in artifact.objects if obj.name == "text/token_embedding"), None
+    )
+    weight_profile = (
+        "q8"
+        if isinstance(embedding, TensorObject) and embedding.format == inventory.W8
+        else "native"
+    )
+    expected_objects = inventory.object_specs_for_profile(weight_profile)
+    if len(artifact.objects) != len(expected_objects):
         _contract_error(
             f"artifact has {len(artifact.objects)} objects, expected "
-            f"{len(inventory.OBJECT_SPECS)}"
+            f"{len(expected_objects)}"
         )
 
     cursor = 0
@@ -160,7 +169,7 @@ def validate_structure(artifact: Artifact) -> StructureSummary:
     formats: Counter[str] = Counter()
     layouts: Counter[str] = Counter()
     for position, (actual, expected) in enumerate(
-        zip(artifact.objects, inventory.OBJECT_SPECS)
+        zip(artifact.objects, expected_objects)
     ):
         if actual.name != expected.name:
             _contract_error(
@@ -200,9 +209,15 @@ def validate_structure(artifact: Artifact) -> StructureSummary:
 
         cursor = actual.offset + actual.bytes
 
-    if dict(formats) != inventory.FORMAT_COUNTS:
+    expected_formats = Counter(
+        obj.format for obj in expected_objects if isinstance(obj, inventory.TensorSpec)
+    )
+    expected_layouts = Counter(
+        obj.layout for obj in expected_objects if isinstance(obj, inventory.TensorSpec)
+    )
+    if formats != expected_formats:
         _contract_error(f"numeric-format counts are {dict(formats)}")
-    if dict(layouts) != inventory.LAYOUT_COUNTS:
+    if layouts != expected_layouts:
         _contract_error(f"layout counts are {dict(layouts)}")
 
     payload_bytes = artifact.file_bytes - artifact.payload_offset

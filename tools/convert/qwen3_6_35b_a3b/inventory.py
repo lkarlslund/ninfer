@@ -22,6 +22,8 @@ from tools.convert.qwen3_6.common.inventory import (
     StoredObjectSpec,
     TensorSpec,
     W8,
+    WEIGHT_PROFILES,
+    apply_weight_profile,
     build_vision_specs,
     tensor_spec,
 )
@@ -170,6 +172,14 @@ TENSOR_SPECS = (
     + DFLASH_TENSOR_SPECS
 )
 OBJECT_SPECS: tuple[StoredObjectSpec, ...] = RESOURCE_SPECS + TENSOR_SPECS
+
+
+def tensor_specs_for_profile(profile: str) -> tuple[TensorSpec, ...]:
+    return apply_weight_profile(TENSOR_SPECS, profile)
+
+
+def object_specs_for_profile(profile: str) -> tuple[StoredObjectSpec, ...]:
+    return RESOURCE_SPECS + tensor_specs_for_profile(profile)
 
 FORMAT_COUNTS = {
     numeric_format: sum(spec.format == numeric_format for spec in TENSOR_SPECS)

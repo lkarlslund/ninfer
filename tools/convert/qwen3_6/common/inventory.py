@@ -23,8 +23,10 @@ Q6 = "Q6G64_F16S"
 W8 = "W8G32_F16S"
 
 DIRECT_FORMATS = frozenset((BF16, FP32, I32))
+QUANTIZED_FORMATS = frozenset((Q4, Q5, Q6, W8))
 FORMAT_NAMES = (BF16, FP32, I32, Q4, Q5, Q6, W8)
 LAYOUT_NAMES = (CONTIGUOUS_LAYOUT, ROW_SPLIT_LAYOUT)
+WEIGHT_PROFILES = ("native", "q8")
 
 VISION_LAYERS = tuple(range(27))
 
@@ -85,6 +87,25 @@ def tensor_spec(
 
     layout = CONTIGUOUS_LAYOUT if numeric_format in DIRECT_FORMATS else ROW_SPLIT_LAYOUT
     return TensorSpec(name=name, shape=shape, format=numeric_format, layout=layout)
+
+
+def apply_weight_profile(
+    specs: tuple[TensorSpec, ...], profile: str
+) -> tuple[TensorSpec, ...]:
+    """Return one closed tensor inventory for a registered weight profile."""
+
+    if profile not in WEIGHT_PROFILES:
+        raise ValueError(
+            f"unsupported weight profile {profile!r}; expected one of {WEIGHT_PROFILES}"
+        )
+    if profile == "native":
+        return specs
+    return tuple(
+        tensor_spec(spec.name, spec.shape, W8)
+        if spec.format in QUANTIZED_FORMATS
+        else spec
+        for spec in specs
+    )
 
 
 RESOURCE_SPECS = tuple(
@@ -154,6 +175,7 @@ __all__ = [
     "Q4",
     "Q5",
     "Q6",
+    "QUANTIZED_FORMATS",
     "RESOURCE_ENCODING",
     "RESOURCE_SPECS",
     "ROW_SPLIT_LAYOUT",
@@ -162,6 +184,8 @@ __all__ = [
     "TensorSpec",
     "VISION_LAYERS",
     "W8",
+    "WEIGHT_PROFILES",
+    "apply_weight_profile",
     "build_vision_specs",
     "tensor_spec",
 ]

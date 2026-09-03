@@ -54,7 +54,8 @@ float parse_float(const char* text, std::string_view label, float minimum, float
 
 KvCacheStorage parse_kv_cache(std::string_view text) {
     if (text == "bf16") { return KvCacheStorage::BFloat16; }
-    if (text == "int8") { return KvCacheStorage::Int8Group64; }
+    if (text == "int8" || text == "q8") { return KvCacheStorage::Int8Group64; }
+    if (text == "int4" || text == "q4") { return KvCacheStorage::Int4Group64; }
     throw std::invalid_argument("invalid kv-dtype: " + std::string(text));
 }
 
@@ -64,7 +65,7 @@ std::string usage_text(const char* argv0) {
     return std::string("usage: ") + argv0 +
            " <model.ninfer> (--prompt <text>|--messages <messages.json>)\n"
            "       [--max-context N] [--prefill-chunk N] [--max-new N] [--device N]\n"
-           "       [--kv-dtype bf16|int8] [--spec mtp|dflash --draft-tokens N]\n"
+           "       [--kv-dtype bf16|q8|q4] [--spec mtp|dflash --draft-tokens N]\n"
            "       [--lm-head-draft]\n"
            "       [--temperature F] [--top-p F] [--top-k N] [--min-p F]\n"
            "       [--presence-penalty F] [--frequency-penalty F] [--seed N] [--greedy]\n"

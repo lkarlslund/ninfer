@@ -61,4 +61,32 @@ void extract_bf16_columns(const Tensor& source, std::int32_t source_column, Tens
                                  cudaMemcpyDeviceToDevice, stream));
 }
 
+void insert_bf16_columns(const Tensor& source, Tensor& destination,
+                         std::int32_t destination_column, cudaStream_t stream) {
+    if (source.dtype != DType::BF16 || destination.dtype != DType::BF16) {
+        throw std::invalid_argument("insert_bf16_columns: tensors must be BF16");
+    }
+    if (source.ne[0] <= 0 || source.ne[1] <= 0 || destination.ne[0] <= 0 ||
+        destination.ne[1] != source.ne[1] || source.ne[2] != 1 || source.ne[3] != 1 ||
+        destination.ne[2] != 1 || destination.ne[3] != 1 || destination_column < 0 ||
+        destination_column > destination.ne[0] - source.ne[0]) {
+        throw std::invalid_argument("insert_bf16_columns: invalid rank-2 slice geometry");
+    }
+    if (!source.is_contiguous() || !destination.is_contiguous() || source.data == nullptr ||
+        destination.data == nullptr || source.data == destination.data) {
+        throw std::invalid_argument(
+            "insert_bf16_columns: tensors must be contiguous, non-null, and non-aliasing");
+    }
+    const std::size_t element_bytes = dtype_size(DType::BF16);
+    const std::size_t width         = static_cast<std::size_t>(source.ne[0]) * element_bytes;
+    const std::size_t source_pitch  = width;
+    const std::size_t destination_pitch =
+        static_cast<std::size_t>(destination.ne[0]) * element_bytes;
+    auto* destination_ptr = static_cast<unsigned char*>(destination.data) +
+                            static_cast<std::size_t>(destination_column) * element_bytes;
+    CUDA_CHECK(cudaMemcpy2DAsync(destination_ptr, destination_pitch, source.data, source_pitch,
+                                 width, static_cast<std::size_t>(source.ne[1]),
+                                 cudaMemcpyDeviceToDevice, stream));
+}
+
 } // namespace ninfer::ops
