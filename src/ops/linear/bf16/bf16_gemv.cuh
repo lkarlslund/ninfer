@@ -14,7 +14,7 @@ namespace ninfer::ops::detail {
 
 template <int Values>
 struct alignas(Values* static_cast<int>(sizeof(__nv_bfloat16))) Bf16GemvPack {
-    static_assert(Values == 4 || Values == 8 || Values == 16);
+    static_assert(Values == 2 || Values == 4 || Values == 8 || Values == 16);
     std::uint32_t words[Values / 2];
 };
 
@@ -44,6 +44,10 @@ __device__ __forceinline__ Bf16GemvPack<Values>
 load_bf16_weight_pack(const __nv_bfloat16* pointer) {
     if constexpr (Cache == Bf16WeightCache::Default) {
         return load_bf16_pack<Values>(pointer);
+    } else if constexpr (Values == 2) {
+        std::uint32_t bits;
+        asm volatile("ld.global.cg.u32 %0, [%1];\n" : "=r"(bits) : "l"(pointer));
+        return load_vec<Bf16GemvPack<Values>>(&bits);
     } else if constexpr (Values == 4) {
         uint2 bits;
         asm volatile("ld.global.cg.v2.u32 {%0, %1}, [%2];\n"

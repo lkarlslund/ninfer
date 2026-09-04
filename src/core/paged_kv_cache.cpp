@@ -61,6 +61,7 @@ PagedKVBatchLayerView single_row_paged_kv_batch_view(const PagedKVLayerView& cac
         .k_scale_pages = cache.k_scale_pages,
         .v_scale_pages = cache.v_scale_pages,
         .block_tables  = cache.block_table.view({cache.block_table.ne[0], 1}),
+        .auxiliary_pages = cache.auxiliary_pages,
         .head_dim      = cache.head_dim,
         .num_kv_heads  = cache.num_kv_heads,
         .storage       = cache.storage,

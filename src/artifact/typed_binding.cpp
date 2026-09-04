@@ -15,6 +15,7 @@ StorageLayout storage_layout_for(NumericFormat format) {
     case NumericFormat::BF16:
     case NumericFormat::FP32:
     case NumericFormat::I32:
+    case NumericFormat::FP8_E4M3FN:
         return StorageLayout::ContiguousLeV1;
     case NumericFormat::Q4G64_F16S:
     case NumericFormat::Q5G64_F16S:
@@ -37,6 +38,8 @@ QType qtype_for(NumericFormat format) {
         return QType::FP32_CTRL;
     case NumericFormat::I32:
         return QType::I32_CTRL;
+    case NumericFormat::FP8_E4M3FN:
+        throw std::logic_error("plain FP8 is a file-backed data tensor, not a Weight");
     case NumericFormat::Q4G64_F16S:
         return QType::Q4G64_F16S;
     case NumericFormat::Q5G64_F16S:
@@ -61,6 +64,8 @@ DType dtype_for(NumericFormat format) {
         return DType::FP32;
     case NumericFormat::I32:
         return DType::I32;
+    case NumericFormat::FP8_E4M3FN:
+        return DType::FP8_E4M3FN;
     default:
         throw std::logic_error("quantized format has no direct dtype");
     }
@@ -163,6 +168,15 @@ ObjectHandle bind_tensor(Binder& binder, std::string_view name, NumericFormat fo
 ObjectHandle bind_device_tensor(Binder& binder, std::string_view name, NumericFormat format,
                                 std::initializer_list<std::uint64_t> shape) {
     return bind_tensor(binder, name, format, shape, TensorPlacement::Device);
+}
+
+ObjectHandle bind_file_backed_tensor(Binder& binder, std::string_view name, NumericFormat format,
+                                     std::initializer_list<std::uint64_t> shape) {
+    const ObjectHandle handle =
+        binder.require_tensor(name, format, storage_layout_for(format),
+                              std::span<const std::uint64_t>(shape.begin(), shape.size()));
+    binder.retain_file_backed(handle);
+    return handle;
 }
 
 ObjectHandle bind_raw_resource(Binder& binder, std::string_view name) {

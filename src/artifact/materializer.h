@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -18,6 +19,7 @@ struct MaterializationStats {
     std::uint64_t h2d_bytes               = 0;
     std::uint64_t device_capacity_bytes   = 0;
     std::uint64_t retained_resource_bytes = 0;
+    std::uint64_t file_backed_bytes        = 0;
     std::uint64_t peak_staging_bytes      = 0;
     std::size_t tensor_count              = 0;
     std::size_t resource_count            = 0;
@@ -35,6 +37,7 @@ public:
 
     void* device_data(ObjectHandle handle) const;
     std::span<const std::byte> resource_bytes(ObjectHandle handle) const;
+    std::span<const std::byte> file_backed_bytes(ObjectHandle handle) const;
     std::vector<std::byte> take_resource_bytes(ObjectHandle handle);
 
     const MaterializationStats& stats() const noexcept { return stats_; }
@@ -48,9 +51,11 @@ private:
     struct ObjectStorage {
         void* device = nullptr;
         std::vector<std::byte> resource;
+        std::span<const std::byte> file_backed;
     };
 
     std::unique_ptr<DeviceArena> device_arena_;
+    std::optional<Reader> file_backing_;
     std::vector<ObjectStorage> objects_;
     MaterializationStats stats_;
 };

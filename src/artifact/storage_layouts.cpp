@@ -52,11 +52,13 @@ std::uint64_t direct_word_bytes(NumericFormat format) {
     switch (format) {
     case NumericFormat::BF16:
         return 2;
+    case NumericFormat::FP8_E4M3FN:
+        return 1;
     case NumericFormat::FP32:
     case NumericFormat::I32:
         return 4;
     default:
-        throw ArtifactError("contiguous-le-v1 requires BF16, FP32, or I32");
+        throw ArtifactError("contiguous-le-v1 requires BF16, FP32, I32, or FP8_E4M3FN");
     }
 }
 
@@ -80,6 +82,8 @@ std::string_view format_name(NumericFormat format) noexcept {
         return "W8G32_F16S";
     case NumericFormat::NVFP4:
         return "NVFP4";
+    case NumericFormat::FP8_E4M3FN:
+        return "FP8_E4M3FN";
     case NumericFormat::FP8_E4M3FN_ROW_BF16S:
         return "FP8_E4M3FN_ROW_BF16S";
     }
@@ -94,6 +98,8 @@ std::string_view layout_name(StorageLayout layout) noexcept {
         return "row-split-k128-v1";
     case StorageLayout::BlockScaleK16M128x4V1:
         return "blockscale-k16-m128x4-v1";
+    case StorageLayout::ExpertBlockScaleK16M128x4V1:
+        return "expert-blockscale-k16-m128x4-v1";
     case StorageLayout::RowScaleV1:
         return "row-scale-v1";
     }
@@ -134,6 +140,9 @@ std::uint64_t tensor_encoded_size(StorageLayout layout, NumericFormat format,
     }
     if (layout == StorageLayout::BlockScaleK16M128x4V1) {
         return block_scale_geometry(format, shape).encoded_bytes;
+    }
+    if (layout == StorageLayout::ExpertBlockScaleK16M128x4V1) {
+        return expert_block_scale_geometry(format, shape).encoded_bytes;
     }
     if (layout == StorageLayout::RowScaleV1) {
         return row_scale_geometry(format, shape).encoded_bytes;
@@ -193,6 +202,38 @@ BlockScaleGeometry block_scale_geometry(NumericFormat format,
     out.weight_divisor_offset =
         checked_add(out.scale_plane_offset, out.scale_plane_bytes, "NVFP4 weight divisor offset");
     out.encoded_bytes = checked_add(out.weight_divisor_offset, 4, "NVFP4 tensor encoded size");
+    return out;
+}
+
+ExpertBlockScaleGeometry expert_block_scale_geometry(
+    NumericFormat format, std::span<const std::uint64_t> shape) {
+    if (format != NumericFormat::NVFP4) {
+        throw ArtifactError("expert-blockscale-k16-m128x4-v1 requires NVFP4");
+    }
+    if (shape.size() != 3 || shape[0] == 0 || shape[1] == 0 || shape[2] == 0) {
+        throw ArtifactError(
+            "expert-blockscale-k16-m128x4-v1 requires a positive rank-three shape");
+    }
+    if (shape[1] % 128 != 0 || shape[2] % 64 != 0) {
+        throw ArtifactError(
+            "expert-blockscale-k16-m128x4-v1 requires N divisible by 128 and K divisible by 64");
+    }
+    ExpertBlockScaleGeometry out;
+    out.experts                = shape[0];
+    out.rows                   = shape[1];
+    out.columns                = shape[2];
+    out.groups_per_row         = shape[2] / 16;
+    const auto matrices        = checked_mul(shape[0], shape[1], "expert bank matrix rows");
+    out.code_plane_bytes       = checked_mul(matrices, shape[2] / 2, "expert code plane bytes");
+    out.scale_plane_offset     = align_up(out.code_plane_bytes, kTensorAlignment,
+                                         "expert scale plane offset");
+    out.scale_plane_bytes      = checked_mul(matrices, out.groups_per_row,
+                                             "expert scale plane bytes");
+    out.divisor_plane_offset   = checked_add(out.scale_plane_offset, out.scale_plane_bytes,
+                                             "expert divisor plane offset");
+    out.divisor_plane_bytes    = checked_mul(shape[0], 4, "expert divisor plane bytes");
+    out.encoded_bytes          = checked_add(out.divisor_plane_offset, out.divisor_plane_bytes,
+                                             "expert bank encoded bytes");
     return out;
 }
 

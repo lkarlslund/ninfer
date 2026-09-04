@@ -41,7 +41,8 @@ struct Bf16GemvSchedule {
     static_assert(WarpsPerRow > 0 && WarpsPerRow <= WarpsPerCta);
     static_assert((WarpsPerCta % WarpsPerRow) == 0);
     static_assert(RowsPerWarp > 0 && RowsPerWarp <= 8);
-    static_assert(ValuesPerLane == 4 || ValuesPerLane == 8 || ValuesPerLane == 16);
+    static_assert(ValuesPerLane == 2 || ValuesPerLane == 4 || ValuesPerLane == 8 ||
+                  ValuesPerLane == 16);
     static_assert(AccumulatorChains > 0 && AccumulatorChains <= ValuesPerLane);
     static_assert((AccumulatorChains & (AccumulatorChains - 1)) == 0);
     static_assert(PrefetchDepth == 1 || PrefetchDepth == 2);
@@ -75,7 +76,8 @@ struct Bf16SmallTInnerSchedule {
     static_assert(WarpsPerRow > 0 && WarpsPerRow <= WarpsPerCta);
     static_assert((WarpsPerCta % WarpsPerRow) == 0);
     static_assert(RowsPerWarp > 0 && RowsPerWarp <= 8);
-    static_assert(ValuesPerLane == 4 || ValuesPerLane == 8 || ValuesPerLane == 16);
+    static_assert(ValuesPerLane == 2 || ValuesPerLane == 4 || ValuesPerLane == 8 ||
+                  ValuesPerLane == 16);
     static_assert(AccumulatorChains > 0 && AccumulatorChains <= ValuesPerLane);
     static_assert((AccumulatorChains & (AccumulatorChains - 1)) == 0);
     static_assert(TokenBatch == 1 || TokenBatch == 2 || TokenBatch == 4 || TokenBatch == 8);
@@ -120,6 +122,49 @@ struct Bf16LinearDecodeScheduleSelector<Bf16GemvGeometry<5120, 6144>> {
                          Bf16PhaseOrder::RowSwizzled, 1, 2, 1, 1>;
 };
 
+template <>
+struct Bf16LinearDecodeScheduleSelector<Bf16GemvGeometry<2560, 640>> {
+    using Type =
+        Bf16GemvSchedule<1, 1, 2, 4, 4, Bf16ActivationAccess::Direct,
+                         Bf16WeightCache::Streaming, Bf16PhaseOrder::Sequential, 1, 2, 4, 1>;
+};
+
+template <>
+struct Bf16LinearDecodeScheduleSelector<Bf16GemvGeometry<320, 10240>> {
+    using Type =
+        Bf16GemvSchedule<8, 8, 1, 8, 4, Bf16ActivationAccess::Direct,
+                         Bf16WeightCache::Streaming, Bf16PhaseOrder::Sequential, 1, 2, 1, 1>;
+};
+
+template <>
+struct Bf16LinearDecodeScheduleSelector<Bf16GemvGeometry<10240, 320>> {
+    using Type =
+        Bf16GemvSchedule<4, 1, 8, 2, 2, Bf16ActivationAccess::Direct,
+                         Bf16WeightCache::Streaming, Bf16PhaseOrder::Sequential, 1, 2, 1, 1>;
+};
+
+template <>
+struct Bf16LinearDecodeScheduleSelector<Bf16GemvGeometry<640, 2560>> {
+    using Type =
+        Bf16GemvSchedule<4, 4, 1, 4, 4, Bf16ActivationAccess::Direct,
+                         Bf16WeightCache::Streaming, Bf16PhaseOrder::Sequential, 1, 2, 4, 1>;
+};
+
+template <>
+struct Bf16LinearDecodeScheduleSelector<Bf16GemvGeometry<512, 2560>> {
+    using Type =
+        Bf16GemvSchedule<4, 4, 1, 4, 4, Bf16ActivationAccess::Direct,
+                         Bf16WeightCache::Streaming, Bf16PhaseOrder::Sequential, 1, 2, 4, 1>;
+};
+
+template <>
+struct Bf16LinearDecodeScheduleSelector<Bf16GemvGeometry<128, 2560>> {
+    using Type =
+        Bf16GemvSchedule<4, 4, 1, 4, 4, Bf16ActivationAccess::Direct,
+                         Bf16WeightCache::Streaming, Bf16PhaseOrder::Sequential, 1, 2, 4, 1>;
+};
+
+
 template <class Geometry>
 using Bf16LinearDecodeSchedule = typename Bf16LinearDecodeScheduleSelector<Geometry>::Type;
 
@@ -153,6 +198,51 @@ struct Bf16LinearSmallTProductionSchedule {
     using Type =
         Bf16SmallTInnerSchedule<4, 1, kRowsPerWarp, kValuesPerLane, 1, 4, kActivationAccess,
                                 kWeightCache, kPhaseOrder, 1, kUnroll2 ? 2 : 1, 1, 2>;
+};
+
+template <int ActiveTokens>
+struct Bf16LinearSmallTProductionSchedule<Bf16GemvGeometry<320, 10240>, ActiveTokens> {
+    using Type = Bf16SmallTInnerSchedule<
+        8, 8, 1, 8, 4, 4, Bf16SmallTActivationAccess::WarpPacked,
+        Bf16WeightCache::Streaming, Bf16PhaseOrder::Sequential, 1, 1, 1, 1>;
+};
+
+template <int ActiveTokens>
+struct Bf16LinearSmallTProductionSchedule<Bf16GemvGeometry<512, 2560>, ActiveTokens> {
+    using Type = Bf16SmallTInnerSchedule<
+        8, 4, 1, 4, 4, 4, Bf16SmallTActivationAccess::WarpPacked,
+        Bf16WeightCache::Streaming, Bf16PhaseOrder::Sequential, 1, 1, 1, 1>;
+};
+
+template <int ActiveTokens>
+struct Bf16LinearSmallTProductionSchedule<Bf16GemvGeometry<640, 2560>, ActiveTokens> {
+    using Type = Bf16SmallTInnerSchedule<
+        8, 4, 1, 4, 4, 4, Bf16SmallTActivationAccess::WarpPacked,
+        Bf16WeightCache::Streaming, Bf16PhaseOrder::Sequential, 1, 1, 1, 1>;
+};
+
+template <int ActiveTokens>
+struct Bf16LinearSmallTProductionSchedule<Bf16GemvGeometry<2560, 640>, ActiveTokens> {
+    static constexpr int kRowsPerWarp =
+        ActiveTokens <= 8 ? 4 : 2;
+    static constexpr auto kActivationAccess =
+        ActiveTokens <= 8 ? Bf16SmallTActivationAccess::WarpPacked
+                          : Bf16SmallTActivationAccess::DirectStream;
+    using Type = Bf16SmallTInnerSchedule<4, 1, kRowsPerWarp, 4, 1, 4, kActivationAccess,
+                                         Bf16WeightCache::Default,
+                                         Bf16PhaseOrder::Sequential, 1, 2, 1, 2>;
+};
+
+template <int ActiveTokens>
+struct Bf16LinearSmallTProductionSchedule<Bf16GemvGeometry<10240, 320>, ActiveTokens> {
+    static constexpr int kRowsPerWarp =
+        ActiveTokens <= 4 ? 8 : (ActiveTokens <= 8 ? 4 : 2);
+    static constexpr auto kActivationAccess =
+        ActiveTokens <= 8 ? Bf16SmallTActivationAccess::WarpPacked
+                          : Bf16SmallTActivationAccess::DirectStream;
+    using Type = Bf16SmallTInnerSchedule<4, 1, kRowsPerWarp, 2, 1, 4, kActivationAccess,
+                                         Bf16WeightCache::Default,
+                                         Bf16PhaseOrder::Sequential, 1, 2, 1, 2>;
 };
 
 } // namespace ninfer::ops::detail

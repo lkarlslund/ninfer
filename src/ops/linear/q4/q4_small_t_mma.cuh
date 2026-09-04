@@ -21,9 +21,9 @@ struct Q4SmallTMmaIdentityRows {
     }
 };
 
-template <int InputRows>
+template <int InputRows, int OutputRows = 131072>
 struct Q4DraftHeadGeometry {
-    static constexpr int kOutputRows   = 131072;
+    static constexpr int kOutputRows   = OutputRows;
     static constexpr int kInputRows    = InputRows;
     static constexpr int kGroupsPerRow = kInputRows / 64;
 };

@@ -19,6 +19,10 @@ class MaterializedArtifact;
                                               NumericFormat format,
                                               std::initializer_list<std::uint64_t> shape);
 
+[[nodiscard]] ObjectHandle bind_file_backed_tensor(Binder& binder, std::string_view name,
+                                                   NumericFormat format,
+                                                   std::initializer_list<std::uint64_t> shape);
+
 [[nodiscard]] ObjectHandle bind_raw_resource(Binder& binder, std::string_view name);
 
 [[nodiscard]] Tensor materialized_tensor(const MaterializedArtifact& materialized,

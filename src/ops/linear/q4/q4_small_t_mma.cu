@@ -16,6 +16,8 @@ constexpr int kLastFullT      = 8;
 constexpr int kLastOptimizedT = 20;
 using FullGeometry            = Q4DraftHeadGeometry<5120>;
 using OptimizedGeometry       = Q4DraftHeadGeometry<2048>;
+using FlashNextGeometry       = Q4DraftHeadGeometry<2560>;
+using FlashNextWideGeometry   = Q4DraftHeadGeometry<2560, 147456>;
 
 template <class Geometry, int TileTokens, int ActiveTokens>
 void launch_exact(const Tensor& x, const Weight& weight, Tensor& out, cudaStream_t stream) {
@@ -42,6 +44,10 @@ constexpr auto kFullLaunchers = make_launchers<FullGeometry, kFirstSmallT>(
     std::make_index_sequence<kLastFullT - kFirstSmallT + 1>{});
 constexpr auto kOptimizedLaunchers = make_launchers<OptimizedGeometry, kFirstSmallT>(
     std::make_index_sequence<kLastOptimizedT - kFirstSmallT + 1>{});
+constexpr auto kFlashNextLaunchers = make_launchers<FlashNextGeometry, kFirstSmallT>(
+    std::make_index_sequence<kLastOptimizedT - kFirstSmallT + 1>{});
+constexpr auto kFlashNextWideLaunchers = make_launchers<FlashNextWideGeometry, kFirstSmallT>(
+    std::make_index_sequence<kLastOptimizedT - kFirstSmallT + 1>{});
 
 template <class Geometry>
 bool matches(const Tensor& x, const Weight& weight) {
@@ -60,6 +66,16 @@ void launch_q4_draft_head_small_t(const Tensor& x, const Weight& weight, Tensor&
     if (matches<OptimizedGeometry>(x, weight) && x.ne[1] <= kLastOptimizedT) {
         kOptimizedLaunchers[static_cast<std::size_t>(x.ne[1] - kFirstSmallT)](x, weight, out,
                                                                               stream);
+        return;
+    }
+    if (matches<FlashNextGeometry>(x, weight) && x.ne[1] <= kLastOptimizedT) {
+        kFlashNextLaunchers[static_cast<std::size_t>(x.ne[1] - kFirstSmallT)](
+            x, weight, out, stream);
+        return;
+    }
+    if (matches<FlashNextWideGeometry>(x, weight) && x.ne[1] <= kLastOptimizedT) {
+        kFlashNextWideLaunchers[static_cast<std::size_t>(x.ne[1] - kFirstSmallT)](
+            x, weight, out, stream);
         return;
     }
     throw std::invalid_argument("Q4 Linear draft-head small-T: unsupported exact problem");

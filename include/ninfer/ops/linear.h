@@ -7,8 +7,27 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 
 namespace ninfer::ops {
+
+// Program-owned dense-BF16 execution resource.  Large-T registered BF16
+// projections may use the vendor tensor-core backend; decode and graph shapes
+// remain on NInfer's fixed CUDA kernels.
+class Bf16GemmContext {
+public:
+    explicit Bf16GemmContext(cudaStream_t stream);
+    ~Bf16GemmContext();
+
+    Bf16GemmContext(const Bf16GemmContext&) = delete;
+    Bf16GemmContext& operator=(const Bf16GemmContext&) = delete;
+
+    void launch(const Tensor& x, const Weight& w, Tensor& out, cudaStream_t stream);
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+};
 
 /**
  * @brief Permitted private activation-compute profiles for a linear projection.
@@ -57,7 +76,9 @@ enum class LinearPolicy : std::uint8_t {
  * @par Supported execution domain
  * Registered execution uses RowSplit Q4G64_F16S, Q5G64_F16S, Q6G64_F16S, or W8G32_F16S weights
  * with FP16 scales, block-scaled NVFP4 weights, row-scaled FP8_E4M3FN_ROW_BF16S weights, plus
- * registered contiguous BF16_CTRL problems. Each format owns a finite registry of exact physical
+ * registered contiguous BF16_CTRL problems. Qwen3.8 Flash-Next adds its exact BF16 projection
+ * geometries, including hyperconnection, attention/GDN, shared-expert, output-head, and Vision
+ * matrices. Each format owns a finite registry of exact physical
  * weight problems and selects its kernel internally; a valid encoding and alignment do not imply
  * arbitrary N/K support. FP8 currently registers `[N,K]` in `{[14336,5120], [16384,5120],
  * [34816,5120], [248320,5120], [5120,6144], [5120,17408]}` at every positive T. The current NVFP4
@@ -117,5 +138,8 @@ void linear(const Tensor& x, const Weight& w, Tensor& out, LinearPolicy policy,
  * @param[in] stream CUDA stream on which execution is enqueued.
  */
 void linear(const Tensor& x, const Weight& w, Tensor& out, cudaStream_t stream);
+
+void linear(const Tensor& x, const Weight& w, Tensor& out, cudaStream_t stream,
+            Bf16GemmContext* bf16_gemm);
 
 } // namespace ninfer::ops

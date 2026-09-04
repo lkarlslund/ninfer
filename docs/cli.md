@@ -236,10 +236,12 @@ Run `./build/apps/ninfer --help` for the exact option contract.
 ## Context and memory
 
 The registered model IDs have a native context limit of 262,144 tokens. The practical allocation
-on one RTX 5090 depends on the selected artifact, media workload, output budget, and KV-cache type.
+depends on the selected artifact, GPU memory, media workload, output budget, and KV-cache type.
 Artifact identity selects the weight profile;
 `--kv-dtype` selects runtime KV storage. The prepared prompt must fit
 `--max-context`; generation stops at the remaining context capacity when necessary.
+Qwen3.8 Flash-Next 125B-A6B requires `--kv-dtype bf16`, supports at most three MTP draft tokens,
+and needs a GPU large enough for its approximately 77.8 GB startup residency plus runtime state.
 `--kv-capacity N` controls the shared physical Main Text KV pool independently and is rounded up to
 the 64-token page size. `--kv-capacity auto` loads the selected weights, measures the remaining GPU
 memory, and directly chooses the largest legal page capacity for the complete enabled runtime

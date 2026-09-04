@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
+#include <optional>
 #include <stdexcept>
 
 namespace {
@@ -98,7 +99,7 @@ int main() {
         const auto retained_tensor                            = validation_binder.require_tensor(
             "weights/second", ninfer::artifact::NumericFormat::BF16,
             ninfer::artifact::StorageLayout::ContiguousLeV1, retained_shape);
-        validation_binder.materialize_on_device(retained_tensor);
+        validation_binder.retain_file_backed(retained_tensor);
         constexpr std::array<std::uint64_t, 2> fp8_shape = {2, 4};
         const auto validated_fp8                         = validation_binder.require_tensor(
             "weights/fp8", ninfer::artifact::NumericFormat::FP8_E4M3FN_ROW_BF16S,
@@ -106,8 +107,9 @@ int main() {
         validation_binder.validate_only(validated_fp8);
         const auto validation_plan = validation_binder.finish();
         require(validation_plan.object_count == 4 && validation_plan.host_objects.size() == 1 &&
-                    validation_plan.device_objects.size() == 1 &&
-                    validation_plan.device_capacity_bytes == kSecondTensor.size(),
+                    validation_plan.device_objects.empty() &&
+                    validation_plan.file_backed_objects.size() == 1 &&
+                    validation_plan.device_capacity_bytes == 0,
                 "validate-only tensor was included in the materialization plan");
 
         int device_count              = 0;
@@ -184,6 +186,35 @@ int main() {
         const auto retained = materialized.resource_bytes(resource);
         require(std::equal(retained.begin(), retained.end(), kResource.begin(), kResource.end()),
                 "retained resource payload differs from the artifact");
+
+        std::optional<ninfer::artifact::Reader> file_reader;
+        file_reader.emplace(fixture.path);
+        ninfer::artifact::Binder file_binder(*file_reader);
+        const auto file_resource = file_binder.require_resource(
+            "frontend/test.json", ninfer::artifact::ResourceEncoding::RawBytesV1);
+        file_binder.validate_only(file_resource);
+        const auto file_tensor = file_binder.require_tensor(
+            "weights/test", ninfer::artifact::NumericFormat::BF16,
+            ninfer::artifact::StorageLayout::ContiguousLeV1, tensor_shape);
+        file_binder.retain_file_backed(file_tensor);
+        const auto file_second = file_binder.require_tensor(
+            "weights/second", ninfer::artifact::NumericFormat::BF16,
+            ninfer::artifact::StorageLayout::ContiguousLeV1, second_shape);
+        file_binder.materialize_on_device(file_second);
+        const auto file_fp8 = file_binder.require_tensor(
+            "weights/fp8", ninfer::artifact::NumericFormat::FP8_E4M3FN_ROW_BF16S,
+            ninfer::artifact::StorageLayout::RowScaleV1, fp8_shape);
+        file_binder.validate_only(file_fp8);
+        auto file_plan = file_binder.finish();
+        auto file_materialized =
+            ninfer::artifact::materialize(*file_reader, file_plan, device);
+        file_reader.reset();
+        const auto file_bytes = file_materialized.file_backed_bytes(file_tensor);
+        require(file_bytes.size() == kTensor.size() &&
+                    std::equal(file_bytes.begin(), file_bytes.end(), kTensor.begin()),
+                "file-backed tensor payload differs after Reader destruction");
+        require(file_materialized.stats().file_backed_bytes == kTensor.size(),
+                "file-backed byte accounting is incomplete");
 
         const auto& stats = materialized.stats();
         require(stats.tensor_count == 3 && stats.resource_count == 1 &&

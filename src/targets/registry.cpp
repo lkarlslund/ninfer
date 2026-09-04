@@ -147,6 +147,7 @@ ConstructedTarget construct_registered(const EngineOptions& options, DeviceConte
     summary.artifact_bytes_read  = stats.file_bytes;
     summary.host_to_device_bytes = stats.h2d_bytes;
     summary.peak_staging_bytes   = stats.peak_staging_bytes;
+    summary.file_backed_bytes    = stats.file_backed_bytes;
     summary.tensor_count         = stats.tensor_count;
     summary.resource_count       = stats.resource_count;
     summary.context_cost         = context_cost.summary;
@@ -194,6 +195,26 @@ Qwen3_6_35BA3BInstance::Qwen3_6_35BA3BInstance(std::unique_ptr<LoadedQwen3_6_35B
 
 Qwen3_6_35BA3BInstance::~Qwen3_6_35BA3BInstance() = default;
 
+LoadedQwen3_8FlashNext125BA6B::LoadedQwen3_8FlashNext125BA6B(
+    std::unique_ptr<Qwen3_8FlashNext125BA6B::LoadedModel> stable_model,
+    const EngineOptions& options)
+    : model(std::move(stable_model)),
+      frontend(Qwen3_8FlashNext125BA6B::make_frontend(*model, options)) {}
+
+LoadedQwen3_8FlashNext125BA6B::~LoadedQwen3_8FlashNext125BA6B() = default;
+
+Qwen3_8FlashNext125BA6BInstance::Qwen3_8FlashNext125BA6BInstance(
+    std::unique_ptr<LoadedQwen3_8FlashNext125BA6B> stable_loaded,
+    runtime::KvCapacityResolution resolution,
+    Qwen3_8FlashNext125BA6B::SequencePlan sequence_plan, DeviceContext& device,
+    const StartupObserver& startup_observer)
+    : loaded(std::move(stable_loaded)), kv_capacity_resolution(resolution),
+      capacity(sequence_plan.capacity()),
+      program(Qwen3_8FlashNext125BA6B::create_program(
+          *loaded->model, std::move(sequence_plan), device, startup_observer)) {}
+
+Qwen3_8FlashNext125BA6BInstance::~Qwen3_8FlashNext125BA6BInstance() = default;
+
 ConstructedTarget construct_target(const EngineOptions& options, DeviceContext& device) {
     validate_options(options);
     const auto load_start = Clock::now();
@@ -213,6 +234,11 @@ ConstructedTarget construct_target(const EngineOptions& options, DeviceContext& 
     if (identity.model_id == Qwen3_6_35BA3B::model_id) {
         return construct_registered<Qwen3_6_35BA3B, LoadedQwen3_6_35BA3B, Qwen3_6_35BA3BInstance>(
             options, device, reader, load_start, Qwen3_6_35BA3B::target_key);
+    }
+    if (identity.model_id == Qwen3_8FlashNext125BA6B::model_id) {
+        return construct_registered<Qwen3_8FlashNext125BA6B, LoadedQwen3_8FlashNext125BA6B,
+                                    Qwen3_8FlashNext125BA6BInstance>(
+            options, device, reader, load_start, Qwen3_8FlashNext125BA6B::target_key);
     }
     throw std::runtime_error("artifact identity '" + identity.model_id + "/" + identity.weights_id +
                              "' has no registered target for this device");

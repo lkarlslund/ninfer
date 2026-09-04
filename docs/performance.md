@@ -32,6 +32,52 @@ Qwen3.8-27B weight profiles cover the MTP0 long-context profile and the complete
 speculative-decode corpus at C=1, 2, 4, and 8; each C=1 point also supplies the corresponding
 single-request MTP3 results below.
 
+## Qwen3.8 Flash-Next 125B-A6B versus vLLM
+
+The Flash-Next campaign measures one request on an NVIDIA RTX PRO 6000 Blackwell Workstation
+Edition (96 GiB), CUDA compile/runtime and driver 13.3, BF16 KV, an 8,192-token NInfer prefill
+chunk, CUDA Graph decode, greedy selection, and 512 generated tokens. The maximum prompt is
+261,632 tokens, so prompt plus output reaches the model's complete 262,144-token context. vLLM
+`0.1.dev20740+g55f69ea17` and NInfer use the same `RadixArk/Qwen3.8-Flash-Next-NVFP4` represented
+weights. vLLM used one persistent warm process for MTP0 and one for MTP3; every prompt length had
+one unmeasured warm request followed by five measured requests. NInfer used warmup=1 and one
+measured request per point. Prefix reuse was disabled for these uncached PP/TG comparisons.
+
+The ratio columns are NInfer divided by vLLM. Thus `TG ratio >= 1.20` is the acceptance gate, while
+PP ratios near one show comparable prompt processing. NInfer's measured PP range is 0.86–1.10x
+vLLM, and every measured TG point clears 1.20x.
+
+| Prompt | MTP0 PP | vLLM PP | PP ratio | MTP0 TG | vLLM TG | TG ratio |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1,024 | 11,235 | 10,222 | 1.10x | 102.9 | 79.0 | 1.30x |
+| 8,192 | 12,080 | 13,716 | 0.88x | 100.0 | 79.0 | 1.27x |
+| 32,768 | 11,412 | 12,767 | 0.89x | 97.0 | 79.0 | 1.23x |
+| 65,536 | 10,900 | 12,109 | 0.90x | 96.7 | 79.0 | 1.23x |
+| 131,072 | 10,086 | 11,217 | 0.90x | 94.8 | 79.0 | 1.20x |
+| 196,608 | 9,423 | 10,413 | 0.91x | 95.5 | 79.0 | 1.21x |
+| 261,632 | 9,299 | 9,846 | 0.94x | 95.7 | 79.0 | 1.21x |
+
+| Prompt | MTP3 PP | vLLM PP | PP ratio | MTP3 TG | vLLM TG | TG ratio |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1,024 | 10,435 | 10,260 | 1.02x | 178.2 | 112.3 | 1.59x |
+| 8,192 | 11,349 | 13,246 | 0.86x | 274.4 | 198.5 | 1.38x |
+| 32,768 | 10,805 | 11,985 | 0.90x | 253.6 | 196.1 | 1.29x |
+| 65,536 | 10,316 | 11,293 | 0.91x | 256.1 | 194.5 | 1.32x |
+| 131,072 | 9,536 | 10,376 | 0.92x | 243.9 | 191.6 | 1.27x |
+| 196,608 | 8,797 | 9,809 | 0.90x | 232.2 | 190.1 | 1.22x |
+| 261,632 | 8,814 | 9,371 | 0.94x | 240.9 | 191.4 | 1.26x |
+
+NInfer startup is 23.5–25.2 seconds for the measured profiles. About 21.6–23.1 seconds is artifact
+read/upload; the remaining time pins Host state/KV and prepares CUDA Graphs. The base MTP0
+residency is 77,843,526,912 bytes, while MTP3 with the optimized proposal head is 83,258,958,592
+bytes. The 51.2 GB PLE n-gram table stays file-backed: the target reads selected rows through its
+read-only mapping and the operating-system page cache owns physical Host residency.
+
+A separate persistent-server prefix check used a 9,522-token continuation sharing 9,503 tokens
+with the prior request. Computed prefill fell from 9,512 tokens in 898.6 ms to 19 tokens in 57.0 ms;
+end-to-end latency fell from 1.071 seconds to 0.269 seconds. This cache-hit result is intentionally
+separate from the uncached PP table above.
+
 The single-request corpus requests were submitted serially to a persistent `ninfer-serve` process
 over the loopback OpenAI-compatible HTTP endpoint. Each reported corpus fixture used five fixed
 seeds. Values are arithmetic mean ± sample standard deviation, and server warm-up completes before

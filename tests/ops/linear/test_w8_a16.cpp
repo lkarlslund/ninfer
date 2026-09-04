@@ -106,6 +106,12 @@ int w8_a16_conformance() {
     failures += run_shape("W8_A16", ActivationCompute::A16, make_w8g32_f16s_weight,
                           {2048, 4608, 271U, Comparison::Sampled, false, kN2048K4608});
 
+    constexpr std::array kN2560K4608{
+        a16(1), a16(14), a16(15), a16(16), a16(17), a16(32), a16(33), a16(871), a16(872),
+    };
+    failures += run_shape("W8_A16", ActivationCompute::A16, make_w8g32_f16s_weight,
+                          {2560, 4608, 273U, Comparison::Sampled, false, kN2560K4608});
+
     constexpr std::array kN4608K4608{
         a16(1), a16(8), a16(9), a16(11), a16(12), a16(13), a16(256), a16(257), a16(32768),
     };

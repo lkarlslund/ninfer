@@ -1,0 +1,14 @@
+{
+  "artifact_type": "ninfer_bench_corpus",
+  "schema_version": 1,
+  "tokenizer_source": "local_hf",
+  "tokenizer_model_id": "RadixArk/Qwen3.8-Flash-Next-NVFP4",
+  "add_special_tokens": false,
+  "chat_template": false,
+  "tokens": 261760,
+  "token_count": 261760,
+  "ids_sha256": "e99ca11fe1f3295c2bb495ef018f8cac871798ef5d7bbee48562df61bb103f85",
+  "source": "builtin_curated_bank",
+  "source_files": [],
+  "note": "meaningful tokens; tiled (rotated) and truncated to exactly `tokens`. Repetition fills length only and does not bias throughput."
+}

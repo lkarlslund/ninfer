@@ -29,6 +29,7 @@ inline constexpr std::size_t kDefaultHostKvCapacityBytes = 8ULL << 30;
 
 enum class KvCacheStorage : std::uint8_t {
     BFloat16,
+    BFloat16KeyValue,
     Int8Group64,
     Fp8E4M3Row256,
     Nvfp4Group16,
@@ -955,6 +956,7 @@ struct LoadSummary {
     std::uint64_t artifact_bytes_read  = 0;
     std::uint64_t host_to_device_bytes = 0;
     std::uint64_t peak_staging_bytes   = 0;
+    std::uint64_t file_backed_bytes    = 0;
     std::size_t tensor_count           = 0;
     std::size_t resource_count         = 0;
     ContextCostSummary context_cost;

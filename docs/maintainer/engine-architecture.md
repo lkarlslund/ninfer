@@ -175,8 +175,10 @@ Program 不根据 session、FIFO 位置或用户身份决定缓存价值。
 
 Engine 构造时读取 `.ninfer` identity，并从 closed registry 选择 exact compile-time package。Package 提供
 同一组 Frontend、request-plan、Program 和 execution-result 语义；target identity、artifact binding、模型
-view 与 execution leaves 保持 package-private。Qwen3.6 family 的共享 schedule 通过 compile-time Variant
-实例化，worker hot path 不执行 runtime family selection。
+view 与 execution leaves 保持 package-private。Qwen3.6 与 Qwen3.8 Flash-Next 各自拥有独立的
+Frontend、prepared-prompt 类型、state 与 Program schedule；各 family 内通过 compile-time Variant
+实例化。公共 PreparedPrompt PIMPL 只在 Engine 边界保存 family alternative，worker hot path 不执行
+runtime family selection。
 
 权重、State/KV backing、block-table matrices、workspace 与 CUDA Graph resources 在 Engine 开始接受请求前
 建立。运行期改变 ownership、mapping、frontier 与 replica placement，但不重建这些大块 Device allocations。
@@ -496,7 +498,7 @@ checkpoint catalog。
 | Scheduler | `src/runtime/engine/scheduler.h`, `admission_policy.*` |
 | ResourceManager 与 materialization planner | `src/runtime/engine/resource_manager.h`, `materialization_planner.h` |
 | package-neutral runtime contracts | `src/runtime/contract/types.h` |
-| target Program | `src/targets/qwen3_6/impl/runtime/` |
+| target Programs | `src/targets/qwen3_6/impl/runtime/`, `src/targets/qwen3_8_flash_next/impl/runtime/` |
 | physical primitives | `src/core/` |
 | semantic Ops | `src/ops/`, `include/ninfer/ops/` |
 | HTTP Gateway | `src/serve/` |

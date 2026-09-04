@@ -9,14 +9,27 @@
 namespace ninfer::ops::detail {
 
 Bf16Launch select_bf16_a16_launch(std::int32_t n, std::int32_t k, std::int32_t t) {
-    const bool supported_problem = (n == 14336 && k == 5120) || (n == 5120 && k == 6144);
+    const bool legacy_small_t = (n == 14336 && k == 5120) || (n == 5120 && k == 6144);
+    const bool flash_next_problem =
+        (n == 320 && k == 10240) || (n == 48 && k == 2560) ||
+        (n == 10240 && k == 320) ||
+        (n == 12288 && k == 2560) || (n == 512 && k == 2560) ||
+        (n == 128 && k == 2560) ||
+        (n == 2560 && k == 6144) || (n == 640 && k == 2560) ||
+        (n == 10240 && k == 2560) || (n == 6144 && k == 2560) ||
+        (n == 2560 && k == 640) || (n == 2560 && k == 2560) ||
+        (n == 248320 && k == 2560) || (n == 117248 && k == 2560);
+    const bool supported_problem = legacy_small_t || flash_next_problem;
     if (!supported_problem || t <= 0) {
         throw std::invalid_argument("bf16 linear: unsupported shape or T");
     }
     if (t == 1) { return launch_bf16_decode; }
-    const std::int32_t small_t_end =
-        n == 5120 ? kBf16SmallTMaxTokens : kBf16LinearSmallTDispatchEnd;
-    if (t <= small_t_end) { return launch_bf16_small_t; }
+    if (flash_next_problem && t <= 16) { return launch_bf16_small_t; }
+    if (legacy_small_t) {
+        const std::int32_t small_t_end =
+            n == 5120 ? kBf16SmallTMaxTokens : kBf16LinearSmallTDispatchEnd;
+        if (t <= small_t_end) { return launch_bf16_small_t; }
+    }
     return launch_bf16_mma;
 }
 

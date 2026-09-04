@@ -75,6 +75,20 @@ class BlockScaleGeometry:
 
 
 @dataclass(frozen=True, slots=True)
+class ExpertBlockScaleGeometry:
+    experts: int
+    n: int
+    k: int
+    groups_per_row: int
+    code_plane_bytes: int
+    scale_plane_offset: int
+    scale_plane_bytes: int
+    divisor_plane_offset: int
+    divisor_plane_bytes: int
+    payload_bytes: int
+
+
+@dataclass(frozen=True, slots=True)
 class RowScaleGeometry:
     n: int
     k: int
@@ -99,7 +113,7 @@ class RowPlanes:
 
 
 CONTIGUOUS_LE_V1 = Layout(
-    "contiguous-le-v1", 256, frozenset(("BF16", "FP32", "I32"))
+    "contiguous-le-v1", 256, frozenset(("BF16", "FP32", "I32", "FP8_E4M3FN"))
 )
 ROW_SPLIT_K128_V1 = Layout(
     "row-split-k128-v1",
@@ -108,6 +122,11 @@ ROW_SPLIT_K128_V1 = Layout(
 )
 BLOCKSCALE_K16_M128X4_V1 = Layout(
     "blockscale-k16-m128x4-v1",
+    256,
+    frozenset(("NVFP4",)),
+)
+EXPERT_BLOCKSCALE_K16_M128X4_V1 = Layout(
+    "expert-blockscale-k16-m128x4-v1",
     256,
     frozenset(("NVFP4",)),
 )
@@ -124,6 +143,7 @@ LAYOUTS = MappingProxyType(
             CONTIGUOUS_LE_V1,
             ROW_SPLIT_K128_V1,
             BLOCKSCALE_K16_M128X4_V1,
+            EXPERT_BLOCKSCALE_K16_M128X4_V1,
             ROW_SCALE_V1,
         )
     }
@@ -249,6 +269,38 @@ def block_scale_geometry(
     )
 
 
+def expert_block_scale_geometry(
+    format: str | Nvfp4Format, shape: Sequence[int]
+) -> ExpertBlockScaleGeometry:
+    spec = _format(format)
+    if not isinstance(spec, Nvfp4Format):
+        raise ValueError("expert-blockscale-k16-m128x4-v1 requires NVFP4")
+    experts, n, k = _shape(shape, rank=3)
+    if n % 128 != 0 or k % 64 != 0:
+        raise ValueError(
+            "expert-blockscale-k16-m128x4-v1 requires N divisible by 128 "
+            "and K divisible by 64"
+        )
+    groups_per_row = k // spec.group_size
+    code_plane_bytes = experts * n * k // 2
+    scale_plane_offset = align_up(code_plane_bytes, PLANE_ALIGNMENT)
+    scale_plane_bytes = experts * n * groups_per_row
+    divisor_plane_offset = scale_plane_offset + scale_plane_bytes
+    divisor_plane_bytes = experts * 4
+    return ExpertBlockScaleGeometry(
+        experts=experts,
+        n=n,
+        k=k,
+        groups_per_row=groups_per_row,
+        code_plane_bytes=code_plane_bytes,
+        scale_plane_offset=scale_plane_offset,
+        scale_plane_bytes=scale_plane_bytes,
+        divisor_plane_offset=divisor_plane_offset,
+        divisor_plane_bytes=divisor_plane_bytes,
+        payload_bytes=divisor_plane_offset + divisor_plane_bytes,
+    )
+
+
 def row_scale_geometry(
     format: str | Fp8RowFormat, shape: Sequence[int]
 ) -> RowScaleGeometry:
@@ -295,6 +347,10 @@ def encoded_size(
         if not isinstance(numeric_spec, Nvfp4Format):
             raise ValueError("blockscale-k16-m128x4-v1 requires NVFP4")
         return block_scale_geometry(numeric_spec, shape).payload_bytes
+    if layout_spec is EXPERT_BLOCKSCALE_K16_M128X4_V1:
+        if not isinstance(numeric_spec, Nvfp4Format):
+            raise ValueError("expert-blockscale-k16-m128x4-v1 requires NVFP4")
+        return expert_block_scale_geometry(numeric_spec, shape).payload_bytes
     if layout_spec is ROW_SCALE_V1:
         if not isinstance(numeric_spec, Fp8RowFormat):
             raise ValueError("row-scale-v1 requires a row-scaled FP8 format")
@@ -306,6 +362,7 @@ _DIRECT_DTYPES = {
     "BF16": torch.bfloat16,
     "FP32": torch.float32,
     "I32": torch.int32,
+    "FP8_E4M3FN": torch.float8_e4m3fn,
 }
 
 
@@ -314,7 +371,7 @@ def encode_direct(tensor: torch.Tensor, format: str | DirectFormat) -> bytes:
 
     spec = _format(format)
     if not isinstance(spec, DirectFormat):
-        raise ValueError("direct encoding requires BF16, FP32, or I32")
+        raise ValueError("direct encoding requires BF16, FP32, I32, or FP8_E4M3FN")
     expected_dtype = _DIRECT_DTYPES[spec.name]
     if tensor.dtype != expected_dtype:
         raise TypeError(
@@ -358,7 +415,7 @@ def decode_direct(
 
     spec = _format(format)
     if not isinstance(spec, DirectFormat):
-        raise ValueError("direct decoding requires BF16, FP32, or I32")
+        raise ValueError("direct decoding requires BF16, FP32, I32, or FP8_E4M3FN")
     dims = _shape(shape)
     if len(dims) > 16:
         raise ValueError("contiguous-le-v1 supports rank 0 through 16")
@@ -585,6 +642,116 @@ def decode_nvfp4_words(
         raise ValueError("NVFP4 weight divisor must be finite and positive")
     divisor = torch.frombuffer(bytearray(divisor_bytes), dtype=torch.float32).reshape(())
     return codes, scales, divisor
+
+
+def _positive_fp32_vector(
+    value: torch.Tensor | bytes | bytearray | memoryview,
+    length: int,
+) -> tuple[bytes, torch.Tensor]:
+    if isinstance(value, torch.Tensor):
+        if value.dtype != torch.float32 or tuple(value.shape) != (length,):
+            raise TypeError(
+                f"NVFP4 expert weight divisors must be FP32 with shape ({length},)"
+            )
+        tensor = value.detach().contiguous().cpu()
+        raw = encode_direct(tensor, "FP32")
+    else:
+        raw = bytes(value)
+        if len(raw) != length * 4:
+            raise TypeError(
+                f"NVFP4 expert weight divisors must contain exactly {length * 4} bytes"
+            )
+        tensor = torch.frombuffer(bytearray(raw), dtype=torch.float32)
+    if not bool(torch.isfinite(tensor).all()) or not bool((tensor > 0).all()):
+        raise ValueError("NVFP4 expert weight divisors must be finite and positive")
+    return raw, tensor
+
+
+def encode_expert_nvfp4(
+    packed_codes: torch.Tensor,
+    natural_scales: torch.Tensor,
+    weight_divisors: torch.Tensor | bytes | bytearray | memoryview,
+    shape: Sequence[int],
+) -> bytes:
+    """Encode an expert-major bank of exact source NVFP4 matrices."""
+
+    geometry = expert_block_scale_geometry("NVFP4", shape)
+    code_shape = (geometry.experts, geometry.n, geometry.k // 2)
+    scale_shape = (geometry.experts, geometry.n, geometry.groups_per_row)
+    if packed_codes.dtype != torch.uint8 or tuple(packed_codes.shape) != code_shape:
+        raise TypeError(f"NVFP4 expert packed codes must be uint8 with shape {code_shape}")
+    if natural_scales.dtype != torch.uint8 or tuple(natural_scales.shape) != scale_shape:
+        raise TypeError(f"NVFP4 expert scales must be uint8 with shape {scale_shape}")
+    codes = packed_codes.detach().contiguous().cpu()
+    scales = natural_scales.detach().contiguous().cpu()
+    invalid = ((scales & 0x80) != 0) | (scales == 0x7F)
+    if bool(invalid.any()):
+        raise ValueError("NVFP4 expert scales must be nonnegative finite E4M3FN words")
+    divisor_bytes, _ = _positive_fp32_vector(weight_divisors, geometry.experts)
+
+    stored_scales = torch.empty(geometry.scale_plane_bytes, dtype=torch.uint8)
+    matrix_shape = (geometry.n, geometry.k)
+    per_expert = geometry.n * geometry.groups_per_row
+    for expert in range(geometry.experts):
+        begin = expert * per_expert
+        stored_scales[begin : begin + per_expert] = swizzle_nvfp4_scales(
+            scales[expert], matrix_shape
+        )
+
+    payload = bytearray(geometry.payload_bytes)
+    payload[: geometry.code_plane_bytes] = codes.numpy().tobytes()
+    payload[
+        geometry.scale_plane_offset :
+        geometry.scale_plane_offset + geometry.scale_plane_bytes
+    ] = stored_scales.numpy().tobytes()
+    payload[
+        geometry.divisor_plane_offset :
+        geometry.divisor_plane_offset + geometry.divisor_plane_bytes
+    ] = divisor_bytes
+    return bytes(payload)
+
+
+def decode_expert_nvfp4_words(
+    payload: Payload,
+    shape: Sequence[int],
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Decode exact code, natural scale, and divisor words for an expert bank."""
+
+    geometry = expert_block_scale_geometry("NVFP4", shape)
+    actual = _payload_length(payload)
+    if actual != geometry.payload_bytes:
+        raise ValueError(
+            f"NVFP4 expert payload has {actual} bytes, expected {geometry.payload_bytes}"
+        )
+    raw = _payload_tensor(payload, torch.device("cpu"))
+    codes = raw[: geometry.code_plane_bytes].clone().reshape(
+        geometry.experts, geometry.n, geometry.k // 2
+    )
+    stored = raw[
+        geometry.scale_plane_offset :
+        geometry.scale_plane_offset + geometry.scale_plane_bytes
+    ]
+    scales = torch.empty(
+        (geometry.experts, geometry.n, geometry.groups_per_row), dtype=torch.uint8
+    )
+    per_expert = geometry.n * geometry.groups_per_row
+    matrix_shape = (geometry.n, geometry.k)
+    for expert in range(geometry.experts):
+        begin = expert * per_expert
+        scales[expert] = unswizzle_nvfp4_scales(
+            stored[begin : begin + per_expert], matrix_shape
+        )
+    invalid = ((scales & 0x80) != 0) | (scales == 0x7F)
+    if bool(invalid.any()):
+        raise ValueError("NVFP4 expert scales must be nonnegative finite E4M3FN words")
+    divisor_bytes = bytes(
+        raw[
+            geometry.divisor_plane_offset :
+            geometry.divisor_plane_offset + geometry.divisor_plane_bytes
+        ].numpy()
+    )
+    _, divisors = _positive_fp32_vector(divisor_bytes, geometry.experts)
+    return codes, scales, divisors.clone()
 
 
 def _pack_low_nibbles(codes: torch.Tensor) -> torch.Tensor:
@@ -1073,6 +1240,8 @@ __all__ = [
     "BLOCKSCALE_K16_M128X4_V1",
     "BlockScaleGeometry",
     "CONTIGUOUS_LE_V1",
+    "EXPERT_BLOCKSCALE_K16_M128X4_V1",
+    "ExpertBlockScaleGeometry",
     "K_ALIGNMENT",
     "LAYOUTS",
     "Layout",
@@ -1086,16 +1255,19 @@ __all__ = [
     "assemble_row_planes",
     "block_scale_geometry",
     "decode_direct",
+    "decode_expert_nvfp4_words",
     "decode_fp8_row_scaled_words",
     "decode_nvfp4_words",
     "decode_row_split_codes",
     "dequantize_fp8_row_scaled",
     "dequantize_row_split",
     "encode_direct",
+    "encode_expert_nvfp4",
     "encode_fp8_row_scaled",
     "encode_nvfp4",
     "encode_row_split",
     "encoded_size",
+    "expert_block_scale_geometry",
     "gather_row_planes",
     "get_layout",
     "row_scale_geometry",

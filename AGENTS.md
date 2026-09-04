@@ -107,8 +107,10 @@ intermediate artifacts are excluded unless requested or themselves the deliverab
 NInfer is a from-scratch C++/CUDA inference engine for maximum single-GPU inference performance on
 a small set of explicitly registered checkpoint artifacts. The supported identities are
 `qwen3.6-27b/groupwise-int`, `qwen3.6-27b/nvfp4`, `qwen3.8-27b/groupwise-int`,
-`qwen3.8-27b/nvfp4`, and `qwen3.6-35b-a3b/groupwise-int`. The current implementation is compiled
-for `sm_120a` and tuned and measured on NVIDIA GeForce RTX 5090. All identities execute Text,
+`qwen3.8-27b/nvfp4`, `qwen3.6-35b-a3b/groupwise-int`, and
+`qwen3.8-flash-next-125b-a6b/nvfp4`. The current implementation is compiled for `sm_120a`; the
+existing profiles are tuned and measured on NVIDIA GeForce RTX 5090, while Flash-Next is tuned and
+measured on NVIDIA RTX PRO 6000 Blackwell. All identities execute Text,
 image/video Vision, MTP, prefix reuse, CLI, OpenAI/Anthropic serving, and measurement through the
 same public `.ninfer` Engine route; the 35B-A3B target additionally supports DFlash for both Text
 and image/video Vision prompts.
@@ -132,6 +134,16 @@ instance bytes. No mutable state or device allocation is shared between Programs
 is defined as a delta from the other, and there is no runtime family selection or target-dependent
 branch inside family scheduling. All artifacts embed the same six frontend resources, and a
 prepared prompt carries no exact-target tag.
+
+Qwen3.8 Flash-Next is a separate model family. `src/targets/qwen3_8_flash_next` independently owns
+its frontend/output types, Vision definitions, planning/Program/Text/Vision/MTP algorithms, state
+transactions, workspace composition, and CUDA Graph machinery; no Flash-Next state, schedule, or
+compile-time feature switch lives in `src/targets/qwen3_6`. Its 125B-A6B package owns the exact
+dimensions, artifact binder, immutable model view, projection leaves, graph frontiers, and Program
+instance. The public Engine carries the prepared prompt as an opaque family alternative and selects
+the matching family only at the closed registry/Engine boundary. The semantically closed
+HyperConnection, PLE, QSA, Flash-Next GDN, and 512-way MoE Ops live under `src/ops`; file-backed PLE
+hashing and gathering live under `src/targets/qwen3_8_flash_next`.
 
 ## Engineering priorities
 
@@ -166,9 +178,11 @@ routing map, not a mandatory reading list:
   layouts, and paged consumer contracts;
 - `docs/maintainer/artifact-container.md`, `storage-layouts.md`, and `tensor-formats.md`:
   generic `.ninfer` contracts;
-- `docs/maintainer/qwen3.6-27b-artifact.md`, `qwen3.8-27b-artifact.md`, and
-  `qwen3.6-35b-a3b-artifact.md`: exact target inventories, conversion, and binding;
-- `docs/maintainer/qwen3.6-27b-model.md` and `qwen3.6-35b-a3b-model.md`: exact model mathematics,
+- `docs/maintainer/qwen3.6-27b-artifact.md`, `qwen3.8-27b-artifact.md`,
+  `qwen3.6-35b-a3b-artifact.md`, and `qwen3.8-flash-next-125b-a6b-artifact.md`: exact target
+  inventories, conversion, and binding;
+- `docs/maintainer/qwen3.6-27b-model.md`, `qwen3.6-35b-a3b-model.md`, and
+  `qwen3.8-flash-next-125b-a6b-model.md`: exact model mathematics,
   dimensions, and state semantics;
 - `docs/maintainer/op-development.md`: Op admission, contracts, implementation ownership,
   qualification, and performance evidence rules;
@@ -201,6 +215,11 @@ them, but must update the corresponding active authorities and affected implemen
   planning/Program/Text/Vision/speculative/state/workspace/CUDA-Graph algorithms. It has no target
   identity, registry entry, artifact binder, target leaf
   implementation, or storage for a live Program instance.
+- `src/targets/qwen3_8_flash_next` owns the independent Flash-Next family frontend and output
+  semantics, media preprocessing and MRoPE construction, prepared-prompt/output-session types,
+  passive Vision definitions, PLE table lookup, and fixed
+  planning/Program/Text/Vision/MTP/state/workspace/CUDA-Graph algorithms. It does not reuse or
+  conditionally specialize the Qwen3.6 family runtime.
 - `src/targets/<package>` owns its registered checkpoint identities, storage profiles, binder,
   `LoadedModel`, configuration, populated family model-view values and private leaf payloads,
   diagnostics, graph frontier values, and exactly three execution-leaf families: attention

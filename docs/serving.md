@@ -800,13 +800,18 @@ The table lists executable defaults. The startup example selects a long-context 
 | `--seed N` | fixed seed when a request omits one | fresh random seed per request |
 | `--greedy` | force exact argmax for all requests | off |
 
+Qwen3.8 Flash-Next 125B-A6B requires `--kv-dtype bf16`, accepts MTP draft lengths 1 through 3,
+and requires enough GPU memory for approximately 77.8 GB of resident startup weights plus the
+configured context and runtime state. Its PLE table remains file-backed and is not part of GPU
+residency.
+
 Context-cost coefficients resolve once at startup from generic defaults, matching compiled values,
 and optional transfer or artifact-prefill entries from `--context-cost-presets FILE`. A malformed
 file aborts startup; the operational context-cost record and JSONL `server_start` identify the
 selected source.
 
 Engine selects sampling defaults from the loaded model and the request's resolved thinking mode.
-Qwen3.6-27B and Qwen3.8-27B use `1.0/0.95/20/0/0` for
+Qwen3.6-27B, Qwen3.8-27B, and Qwen3.8 Flash-Next 125B-A6B use `1.0/0.95/20/0/0` for
 temperature/top-p/top-k/min-p/presence penalty in thinking mode and `0.7/0.80/20/0/1.5` in
 non-thinking mode. Qwen3.6-35B-A3B differs only in its thinking presence penalty, which is `1.5`.
 Frequency penalty is `0` for all registered presets. Process flags override registered values,

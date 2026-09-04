@@ -83,6 +83,13 @@ std::span<const std::byte> MaterializedArtifact::resource_bytes(ObjectHandle han
     return objects_[handle.index].resource;
 }
 
+std::span<const std::byte> MaterializedArtifact::file_backed_bytes(ObjectHandle handle) const {
+    if (handle.index >= objects_.size() || objects_[handle.index].file_backed.empty()) {
+        throw ArtifactError("object handle does not name a file-backed tensor");
+    }
+    return objects_[handle.index].file_backed;
+}
+
 std::vector<std::byte> MaterializedArtifact::take_resource_bytes(ObjectHandle handle) {
     if (handle.index >= objects_.size() || objects_[handle.index].resource.empty()) {
         throw ArtifactError("object handle does not name a materialized resource");
@@ -118,6 +125,18 @@ MaterializedArtifact materialize(const Reader& reader, const MaterializationPlan
     out.stats_.device_capacity_bytes = capacity;
     out.stats_.tensor_count          = plan.device_objects.size();
     out.stats_.resource_count        = plan.host_objects.size();
+
+    if (!plan.file_backed_objects.empty()) {
+        out.file_backing_.emplace(reader);
+        for (const FileBackedMaterialization& placement : plan.file_backed_objects) {
+            const PayloadSpan payload =
+                out.file_backing_->payload(reader.objects().at(placement.object.index));
+            out.objects_.at(placement.object.index).file_backed = payload.data;
+            out.stats_.file_backed_bytes = checked_add(
+                out.stats_.file_backed_bytes, payload.data.size(),
+                "artifact file-backed byte count overflows u64");
+        }
+    }
 
     for (const HostMaterialization& placement : plan.host_objects) {
         auto& resource            = out.objects_.at(placement.object.index).resource;

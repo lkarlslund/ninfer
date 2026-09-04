@@ -104,6 +104,7 @@ void test_registered_sizes() {
     using ninfer::artifact::tensor_encoded_size;
     constexpr StorageLayout direct   = StorageLayout::ContiguousLeV1;
     constexpr StorageLayout rows     = StorageLayout::RowSplitK128V1;
+    constexpr StorageLayout experts  = StorageLayout::ExpertBlockScaleK16M128x4V1;
     constexpr StorageLayout fp8_rows = StorageLayout::RowScaleV1;
 
     const std::array<std::uint64_t, 2> shape_2x3 = {2, 3};
@@ -113,15 +114,18 @@ void test_registered_sizes() {
     const std::array<std::uint64_t, 2> q6_shape  = {1, 64};
     const std::array<std::uint64_t, 2> w8_shape  = {1, 33};
     const std::array<std::uint64_t, 2> fp8_shape = {2, 4};
+    const std::array<std::uint64_t, 3> expert_shape = {2, 128, 64};
 
     if (tensor_encoded_size(direct, NumericFormat::BF16, shape_2x3) != 12 ||
         tensor_encoded_size(direct, NumericFormat::FP32, {}) != 4 ||
         tensor_encoded_size(direct, NumericFormat::I32, shape_2) != 8 ||
+        tensor_encoded_size(direct, NumericFormat::FP8_E4M3FN, shape_2) != 2 ||
         tensor_encoded_size(rows, NumericFormat::Q4G64_F16S, q4_shape) != 260 ||
         tensor_encoded_size(rows, NumericFormat::Q5G64_F16S, q5_shape) != 528 ||
         tensor_encoded_size(rows, NumericFormat::Q6G64_F16S, q6_shape) != 516 ||
         tensor_encoded_size(rows, NumericFormat::W8G32_F16S, w8_shape) != 264 ||
-        tensor_encoded_size(fp8_rows, NumericFormat::FP8_E4M3FN_ROW_BF16S, fp8_shape) != 260) {
+        tensor_encoded_size(fp8_rows, NumericFormat::FP8_E4M3FN_ROW_BF16S, fp8_shape) != 260 ||
+        tensor_encoded_size(experts, NumericFormat::NVFP4, expert_shape) != 9224) {
         throw std::runtime_error("registered encoded-size calculation is wrong");
     }
     expect_artifact_error([&] { tensor_encoded_size(fp8_rows, NumericFormat::NVFP4, fp8_shape); },

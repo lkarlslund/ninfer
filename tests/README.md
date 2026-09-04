@@ -21,6 +21,8 @@ benchmark-report, and external protocol behavior. Repository verification princi
 - `targets/qwen3_6_27b/` — registered inventory, converter recipe, source verifier, artifact
   bindings, reference diagnostics, family Program/multimodal/MTP behavior, and the opt-in real-Engine
   prefix test and causal-scoring State/KV isolation test;
+- `targets/qwen3_8_flash_next/` — PLE hash/table semantics and shared Flash-Next state contracts;
+- `targets/qwen3_8_flash_next_125b_a6b/` — exact load plan and real Text/MTP/prefix/Vision Engine route;
 - `targets/qwen3_6_35b_a3b/` — registered inventory/converter contracts, artifact-native diagnostic
   reference, MoE oracle, typed binding, selected-expert row access, 256K INT8 memory calculation,
   and the opt-in real public-Engine route;

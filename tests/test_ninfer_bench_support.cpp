@@ -152,6 +152,8 @@ int test_cli_contract() {
                        "benchmark help omits new KV modes");
     failures += expect_string(qb::kv_cache_name(ninfer::KvCacheStorage::Nvfp4Group16), "nvfp4",
                               "NVFP4 report name");
+    failures += expect_string(qb::kv_cache_name(ninfer::KvCacheStorage::BFloat16KeyValue),
+                              "bf16-kv", "BF16 key/value report name");
     failures += expect_string(qb::kv_cache_name(ninfer::KvCacheStorage::Fp8KeyNvfp4Value), "k8v4",
                               "K8V4 report name");
     failures += expect_throws<std::invalid_argument>(
@@ -174,17 +176,17 @@ int test_measurement_contract() {
     failures +=
         expect_u32(combined.requested_output_tokens(), 129, "combined begin plus G outputs");
     failures += expect_u32(pp.required_context(0), 512, "pp context");
-    failures += expect_u32(pp.required_context(5), 522, "MTP pp context");
+    failures += expect_u32(pp.required_context(5), 512, "MTP pp context");
     failures += expect_u32(tg.required_context(0), 129, "tg context");
-    failures += expect_u32(tg.required_context(5), 139, "MTP tg context");
-    failures += expect_u32(combined.required_context(5), 2186, "MTP combined context");
+    failures += expect_u32(tg.required_context(5), 129, "MTP tg context");
+    failures += expect_u32(combined.required_context(5), 2176, "MTP combined context");
     failures += expect_u32(qb::decode_graph_prime_output_tokens(5), 13, "MTP graph-prime outputs");
     failures +=
         expect_u32(qb::decode_graph_prime_required_context(5), 23, "MTP graph-prime context");
 
     const std::vector<qb::BenchTest> matrix = {pp, tg, combined};
     failures +=
-        expect_u32(qb::resolve_max_context(matrix, std::nullopt, 5, true), 2186, "auto context");
+        expect_u32(qb::resolve_max_context(matrix, std::nullopt, 5, true), 2176, "auto context");
     failures +=
         expect_u32(qb::resolve_max_context(matrix, std::optional<std::uint32_t>(4096), 5, true),
                    4096, "explicit context");

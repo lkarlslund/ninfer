@@ -3,6 +3,7 @@
 #include <array>
 #include <limits>
 #include <stdexcept>
+#include <string>
 
 namespace ninfer {
 namespace {
@@ -100,8 +101,12 @@ Tensor Tensor::view(std::initializer_list<std::int32_t> shape) const {
     if (!is_contiguous()) { throw std::invalid_argument("view requires a contiguous tensor"); }
 
     const auto normalized = normalize_shape(shape);
-    if (shape_numel(normalized) != numel()) {
-        throw std::invalid_argument("view element count mismatch");
+    const std::int64_t requested = shape_numel(normalized);
+    const std::int64_t available = numel();
+    if (requested != available) {
+        throw std::invalid_argument("view element count mismatch: requested " +
+                                    std::to_string(requested) + ", available " +
+                                    std::to_string(available));
     }
 
     return Tensor(data, dtype, shape);

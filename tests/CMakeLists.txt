@@ -51,6 +51,22 @@ function(ninfer_add_fused_linear_test name source common)
     LIBRARIES ninfer_ops)
 endfunction()
 
+ninfer_add_op_test(ninfer_hyperconnection_test
+  SOURCES ops/test_hyperconnection.cpp
+  LIBRARIES ninfer_ops)
+ninfer_add_op_test(ninfer_flash_next_ple_test
+  SOURCES ops/test_flash_next_ple.cpp
+  LIBRARIES ninfer_ops)
+ninfer_add_op_test(ninfer_flash_next_moe_test
+  SOURCES ops/test_flash_next_moe.cpp
+  LIBRARIES ninfer_ops)
+ninfer_add_op_test(ninfer_flash_next_qsa_test
+  SOURCES ops/test_flash_next_qsa.cpp
+  LIBRARIES ninfer_ops)
+ninfer_add_op_test(ninfer_flash_next_gdn_test
+  SOURCES ops/test_flash_next_gdn.cpp
+  LIBRARIES ninfer_ops)
+
 # Artifact framing and model-independent runtime contracts.
 ninfer_add_test(ninfer_artifact_reader_test
   SOURCES test_ninfer_artifact_reader.cpp
@@ -58,6 +74,22 @@ ninfer_add_test(ninfer_artifact_reader_test
 ninfer_add_test(ninfer_artifact_materialization_test
   SOURCES test_artifact_materialization.cpp
   LIBRARIES ninfer_artifact)
+ninfer_add_test(ninfer_qwen3_8_flash_next_ple_table_test
+  SOURCES targets/qwen3_8_flash_next/test_ple_table.cpp
+          ${PROJECT_SOURCE_DIR}/src/targets/qwen3_8_flash_next/impl/ple_table.cpp)
+ninfer_add_test(ninfer_qwen3_8_flash_next_load_plan_test
+  SOURCES targets/qwen3_8_flash_next_125b_a6b/test_load_plan.cpp
+          ${PROJECT_SOURCE_DIR}/src/targets/qwen3_8_flash_next_125b_a6b/impl/load_plan.cpp
+          ${PROJECT_SOURCE_DIR}/src/targets/qwen3_8_flash_next_125b_a6b/impl/model.cpp
+  LIBRARIES ninfer_artifact)
+target_include_directories(ninfer_qwen3_8_flash_next_load_plan_test PRIVATE
+  ${PROJECT_SOURCE_DIR}/src/targets/qwen3_8_flash_next/export
+  ${PROJECT_SOURCE_DIR}/src/targets/qwen3_8_flash_next_125b_a6b/export)
+set_tests_properties(ninfer_qwen3_8_flash_next_load_plan_test PROPERTIES SKIP_RETURN_CODE 77)
+ninfer_add_test(ninfer_qwen3_8_flash_next_real_test
+  SOURCES targets/qwen3_8_flash_next_125b_a6b/test_engine_real.cpp
+  LIBRARIES ninfer_engine)
+set_tests_properties(ninfer_qwen3_8_flash_next_real_test PROPERTIES SKIP_RETURN_CODE 77)
 ninfer_add_test(ninfer_media_decode_test
   SOURCES test_media_decode.cpp
   LIBRARIES ninfer_media_decode)

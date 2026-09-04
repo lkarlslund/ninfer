@@ -32,7 +32,7 @@ void launch_rmsnorm(const Tensor& x, const Tensor& weight, const Tensor* z, Tens
     // gated epilogue loses a block per SM for them: warp 35 -> 50 and the wide row 38 -> 48, both
     // three blocks to two, while every other instantiation stays at three. So only that epilogue
     // consults the grid, and the un-prefetched instantiation is compiled only where it is reached.
-    constexpr bool kGateOnGrid = Epilogue == RmsEpilogue::Gated;
+    constexpr bool kGateOnGrid = kRmsGated<Epilogue>;
 
     if (aligned2 && d == 128 && Epilogue == RmsEpilogue::Plain) {
         // Plain per-head D128 is latency-bound for Q32/KV8 rows. Four rows per CTA follows the
@@ -108,7 +108,7 @@ void launch_rmsnorm(const Tensor& x, const Tensor& weight, const Tensor* z, Tens
 } // namespace
 
 void rmsnorm_launch(const Tensor& x, const Tensor& weight, float eps, bool unit_offset,
-                    const Tensor* z, Tensor& out, cudaStream_t stream) {
+                    const Tensor* z, Tensor& out, cudaStream_t stream, bool sigmoid_gate) {
     const std::int32_t d = x.ne[0];
     if (d <= 0) { throw std::invalid_argument("rmsnorm: ne[0] must be positive"); }
     const std::int64_t rows = out.numel() / d;
@@ -124,7 +124,12 @@ void rmsnorm_launch(const Tensor& x, const Tensor& weight, float eps, bool unit_
         ((x_addr | w_addr | z_addr | o_addr) & (alignof(__nv_bfloat162) - 1)) == 0;
 
     if (z != nullptr) {
-        launch_rmsnorm<RmsEpilogue::Gated>(x, weight, z, out, d, rows, eps, aligned2, stream);
+        if (sigmoid_gate) {
+            launch_rmsnorm<RmsEpilogue::SigmoidGated>(x, weight, z, out, d, rows, eps, aligned2,
+                                                       stream);
+        } else {
+            launch_rmsnorm<RmsEpilogue::Gated>(x, weight, z, out, d, rows, eps, aligned2, stream);
+        }
     } else if (unit_offset) {
         launch_rmsnorm<RmsEpilogue::Offset>(x, weight, nullptr, out, d, rows, eps, aligned2,
                                             stream);

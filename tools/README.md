@@ -14,6 +14,7 @@ for the selected tool.
 | Build the 27B artifact | [`convert/qwen3_6_27b/`](convert/qwen3_6_27b/) |
 | Build the Qwen3.8-27B artifact | [`convert/qwen3_8_27b/`](convert/qwen3_8_27b/) |
 | Build the 35B-A3B artifact | [`convert/qwen3_6_35b_a3b/`](convert/qwen3_6_35b_a3b/) |
+| Build the Qwen3.8 Flash-Next 125B-A6B artifact | [`convert/qwen3_8_flash_next_125b_a6b/`](convert/qwen3_8_flash_next_125b_a6b/) |
 | Inspect artifact metadata and objects | [`artifact/inspect.py`](artifact/inspect.py) |
 | Run benchmark matrices | [`bench/`](bench/README.md) |
 | Measure external Serve TTFT | [`bench/ttft/`](bench/ttft/README.md) |
@@ -38,6 +39,11 @@ python3 -m tools.convert.qwen3_6_35b_a3b.convert \
   --model /path/to/Qwen3.6-35B-A3B-base \
   --dflash-model /path/to/Qwen3.6-35B-A3B-DFlash \
   --out out/qwen3_6_35b_a3b.ninfer
+
+python3 -m tools.convert.qwen3_8_flash_next_125b_a6b.convert \
+  --model /path/to/Qwen3.8-Flash-Next-NVFP4 \
+  --out out/qwen3_8_flash_next_125b_a6b_nvfp4.ninfer \
+  --device cuda
 ```
 
 Inspect either result:

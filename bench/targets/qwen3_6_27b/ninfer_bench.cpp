@@ -5,6 +5,7 @@
 #include <cuda_profiler_api.h>
 #include <cuda_runtime.h>
 
+#include <cstdlib>
 #include <exception>
 #include <filesystem>
 #include <fstream>
@@ -79,6 +80,14 @@ ninfer::bench::RepTiming run_repetition(ninfer::Engine& engine,
     auto prompt = engine.prepare_tokens(ninfer::bench::prompt_slice(corpus, prompt_tokens), false);
     ninfer::GenerationResult generated =
         engine.generate(std::move(prompt), benchmark_request(test));
+
+    if (std::getenv("NINFER_BENCH_PRINT_TOKEN_IDS") != nullptr) {
+        std::cerr << "[ninfer_bench] generated token ids:";
+        for (const ninfer::TokenId token : generated.generated_token_ids) {
+            std::cerr << ' ' << token;
+        }
+        std::cerr << '\n';
+    }
 
     const std::uint32_t expected = test.requested_output_tokens();
     if (generated.generated_token_ids.size() != expected) {

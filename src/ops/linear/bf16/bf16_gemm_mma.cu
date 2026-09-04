@@ -38,7 +38,7 @@ void launch_variant(const Tensor& x, const Weight& weight, Tensor& out, cudaStre
 
 template <class Geometry>
 void launch_geometry(const Tensor& x, const Weight& weight, Tensor& out, cudaStream_t stream) {
-    using Schedule = Bf16MmaProductionSchedule<Geometry>;
+    using Schedule = SelectedBf16MmaSchedule<Geometry>;
     if ((x.ne[1] % Schedule::kBlockCols) == 0) {
         launch_variant<Geometry, Schedule, true>(x, weight, out, stream);
     } else {
@@ -49,6 +49,11 @@ void launch_geometry(const Tensor& x, const Weight& weight, Tensor& out, cudaStr
 } // namespace
 
 void launch_bf16_mma(const Tensor& x, const Weight& weight, Tensor& out, cudaStream_t stream) {
+#define NINFER_BF16_MMA(N, K)                                                                  \
+    if (weight.n == (N) && weight.k == (K)) {                                                  \
+        launch_geometry<Bf16GemvGeometry<(N), (K)>>(x, weight, out, stream);                   \
+        return;                                                                                 \
+    }
     if (weight.n == 14336 && weight.k == 5120) {
         launch_geometry<Bf16GemvGeometry<14336, 5120>>(x, weight, out, stream);
         return;
@@ -57,6 +62,21 @@ void launch_bf16_mma(const Tensor& x, const Weight& weight, Tensor& out, cudaStr
         launch_geometry<Bf16GemvGeometry<5120, 6144>>(x, weight, out, stream);
         return;
     }
+    NINFER_BF16_MMA(320, 10240)
+    NINFER_BF16_MMA(48, 2560)
+    NINFER_BF16_MMA(10240, 320)
+    NINFER_BF16_MMA(12288, 2560)
+    NINFER_BF16_MMA(512, 2560)
+    NINFER_BF16_MMA(128, 2560)
+    NINFER_BF16_MMA(2560, 6144)
+    NINFER_BF16_MMA(640, 2560)
+    NINFER_BF16_MMA(10240, 2560)
+    NINFER_BF16_MMA(6144, 2560)
+    NINFER_BF16_MMA(2560, 640)
+    NINFER_BF16_MMA(2560, 2560)
+    NINFER_BF16_MMA(248320, 2560)
+    NINFER_BF16_MMA(117248, 2560)
+#undef NINFER_BF16_MMA
     throw std::invalid_argument("bf16 linear MMA: unsupported exact problem");
 }
 

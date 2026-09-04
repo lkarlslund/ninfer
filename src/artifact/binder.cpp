@@ -112,6 +112,19 @@ void Binder::retain_on_host(ObjectHandle handle) {
     planned_[handle.index] = true;
 }
 
+void Binder::retain_file_backed(ObjectHandle handle) {
+    const auto* tensor = std::get_if<TensorDescriptor>(&descriptor(handle));
+    if (tensor == nullptr) {
+        throw ArtifactError("resource cannot be retained as a file-backed tensor");
+    }
+    if (planned_[handle.index]) {
+        throw ArtifactError("artifact object has more than one materialization placement: " +
+                            tensor->name);
+    }
+    materialization_.file_backed_objects.push_back(FileBackedMaterialization{handle});
+    planned_[handle.index] = true;
+}
+
 void Binder::validate_only(ObjectHandle handle) {
     const ObjectDescriptor& object = descriptor(handle);
     if (planned_[handle.index]) {

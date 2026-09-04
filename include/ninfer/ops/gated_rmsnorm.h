@@ -23,4 +23,8 @@ namespace ninfer::ops {
 void gated_rmsnorm(const Tensor& x, const Tensor& weight, const Tensor& z, float eps, Tensor& out,
                    cudaStream_t stream);
 
+/** Same normalization contract, with an elementwise sigmoid gate instead of SiLU. */
+void sigmoid_gated_rmsnorm(const Tensor& x, const Tensor& weight, const Tensor& z, float eps,
+                           Tensor& out, cudaStream_t stream);
+
 } // namespace ninfer::ops

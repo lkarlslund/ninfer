@@ -20,7 +20,8 @@ constexpr ReductionCriterion gated_rmsnorm_bf16_criterion() {
 
 std::vector<double> gated_rmsnorm_oracle(const std::vector<float>& input,
                                          const std::vector<float>& weight,
-                                         const std::vector<float>& gate, const Shape& shape) {
+                                         const std::vector<float>& gate, const Shape& shape,
+                                         bool sigmoid_gate) {
     std::vector<double> output(input.size());
     const auto row_count = static_cast<std::int64_t>(shape.rows) * shape.tokens;
     for (std::int64_t row = 0; row < row_count; ++row) {
@@ -33,16 +34,18 @@ std::vector<double> gated_rmsnorm_oracle(const std::vector<float>& input,
         const double inverse = 1.0 / std::sqrt(sum_squares / static_cast<double>(shape.d) + kEps);
         for (std::int32_t column = 0; column < shape.d; ++column) {
             const double gate_value = gate[base + column];
-            const double silu       = gate_value / (1.0 + std::exp(-gate_value));
+            const double activation = sigmoid_gate
+                                          ? 1.0 / (1.0 + std::exp(-gate_value))
+                                          : gate_value / (1.0 + std::exp(-gate_value));
             output[base + column]   = static_cast<double>(input[base + column]) * inverse *
-                                    static_cast<double>(weight[column]) * silu;
+                                    static_cast<double>(weight[column]) * activation;
         }
     }
     return output;
 }
 
 int run_case(const char* label, const Shape& shape, std::uint32_t seed, float input_scale = 4.0F,
-             bool bf16x2_unaligned = false) {
+             bool bf16x2_unaligned = false, bool sigmoid_gate = false) {
     const std::size_t count = shape.elements();
     std::vector<float> input(count), weight(shape.d), gate(count);
     fill_uniform(input, seed, -input_scale, input_scale);
@@ -51,7 +54,8 @@ int run_case(const char* label, const Shape& shape, std::uint32_t seed, float in
     round_to_bf16(input);
     round_to_bf16(weight);
     round_to_bf16(gate);
-    const std::vector<double> reference = gated_rmsnorm_oracle(input, weight, gate, shape);
+    const std::vector<double> reference =
+        gated_rmsnorm_oracle(input, weight, gate, shape, sigmoid_gate);
 
     DeviceInput device_input  = make_input(input, bf16x2_unaligned);
     DeviceInput device_weight = make_input(weight, bf16x2_unaligned);
@@ -65,7 +69,12 @@ int run_case(const char* label, const Shape& shape, std::uint32_t seed, float in
     Tensor weight_tensor(device_weight.data, DType::BF16, {shape.d});
     Tensor gate_tensor   = tensor_for(device_gate.data, shape);
     Tensor output_tensor = tensor_for(output_data, shape);
-    ops::gated_rmsnorm(input_tensor, weight_tensor, gate_tensor, kEps, output_tensor, nullptr);
+    if (sigmoid_gate) {
+        ops::sigmoid_gated_rmsnorm(input_tensor, weight_tensor, gate_tensor, kEps, output_tensor,
+                                   nullptr);
+    } else {
+        ops::gated_rmsnorm(input_tensor, weight_tensor, gate_tensor, kEps, output_tensor, nullptr);
+    }
     cuda_synchronize();
 
     int failures = verify_reduction(label, from_device_bf16(output_data, count), reference,
@@ -92,6 +101,10 @@ int main() {
     failures += run_case("gated_rmsnorm [128,32,128]", {128, 32, 128}, 1403U);
     failures += run_case("gated_rmsnorm near-zero [128,32]", {128, 32}, 1404U, 1.0e-5F);
     failures += run_case("gated_rmsnorm unaligned [128,48]", {128, 48}, 1405U, 4.0F, true);
+    failures +=
+        run_case("sigmoid_gated_rmsnorm [128,48,7]", {128, 48, 7}, 1407U, 4.0F, false, true);
+    failures += run_case("sigmoid_gated_rmsnorm unaligned [128,48]", {128, 48}, 1408U, 4.0F,
+                         true, true);
     std::cout << (failures ? "FAIL" : "OK") << " gated_rmsnorm\n";
     return failures ? 1 : 0;
 }

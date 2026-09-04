@@ -165,4 +165,14 @@ void linear(const Tensor& x, const Weight& w, Tensor& out, cudaStream_t stream) 
     dispatch_linear(x, w, out, LinearPolicy::A16Only, nullptr, stream);
 }
 
+void linear(const Tensor& x, const Weight& w, Tensor& out, cudaStream_t stream,
+            Bf16GemmContext* bf16_gemm) {
+    validate_linear_semantics(x, w, out, LinearPolicy::A16Only);
+    if (bf16_gemm != nullptr && w.qtype == QType::BF16_CTRL && x.ne[1] > 16) {
+        bf16_gemm->launch(x, w, out, stream);
+        return;
+    }
+    dispatch_linear(x, w, out, LinearPolicy::A16Only, nullptr, stream);
+}
+
 } // namespace ninfer::ops

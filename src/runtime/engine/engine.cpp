@@ -122,15 +122,27 @@ std::string context_capacity_error(std::size_t prompt_tokens, std::uint32_t max_
 
 class PreparedPrompt::Impl {
 public:
+    using Value =
+        std::variant<targets::qwen3_6::PreparedPrompt, targets::qwen3_8_flash_next::PreparedPrompt>;
+
+    template <class TargetPreparedPrompt>
     Impl(PromptSummary prompt_summary, PromptPreparationStats preparation, SamplingMode mode,
-         targets::qwen3_6::PreparedPrompt prepared)
+         TargetPreparedPrompt prepared)
         : summary(std::move(prompt_summary)), prepare(std::move(preparation)), sampling_mode(mode),
           value(std::move(prepared)) {}
+
+    template <class TargetPreparedPrompt>
+    static TargetPreparedPrompt take(Value& value) {
+        if (!std::holds_alternative<TargetPreparedPrompt>(value)) {
+            throw std::invalid_argument("PreparedPrompt belongs to a different model family");
+        }
+        return std::get<TargetPreparedPrompt>(std::move(value));
+    }
 
     PromptSummary summary;
     PromptPreparationStats prepare;
     SamplingMode sampling_mode = SamplingMode::Thinking;
-    targets::qwen3_6::PreparedPrompt value;
+    Value value;
 };
 
 PreparedPrompt::PreparedPrompt() noexcept                            = default;
@@ -216,12 +228,15 @@ GenerationResult GenerationHandle::wait(OutputSink* sink, const CancellationView
 
 class Engine::Impl {
 public:
-    using Core27      = runtime::EngineCore<targets::Qwen3_6_27BInstance>;
-    using Core35      = runtime::EngineCore<targets::Qwen3_6_35BA3BInstance>;
-    using ScoreCore27 = runtime::CausalScoreCore<targets::Qwen3_6_27BInstance>;
-    using ScoreCore35 = runtime::CausalScoreCore<targets::Qwen3_6_35BA3BInstance>;
+    using Core27         = runtime::EngineCore<targets::Qwen3_6_27BInstance>;
+    using Core35         = runtime::EngineCore<targets::Qwen3_6_35BA3BInstance>;
+    using CoreFlash      = runtime::EngineCore<targets::Qwen3_8FlashNext125BA6BInstance>;
+    using ScoreCore27    = runtime::CausalScoreCore<targets::Qwen3_6_27BInstance>;
+    using ScoreCore35    = runtime::CausalScoreCore<targets::Qwen3_6_35BA3BInstance>;
+    using ScoreCoreFlash = runtime::CausalScoreCore<targets::Qwen3_8FlashNext125BA6BInstance>;
     using Core = std::variant<std::monostate, std::unique_ptr<Core27>, std::unique_ptr<Core35>,
-                              std::unique_ptr<ScoreCore27>, std::unique_ptr<ScoreCore35>>;
+                              std::unique_ptr<CoreFlash>, std::unique_ptr<ScoreCore27>,
+                              std::unique_ptr<ScoreCore35>, std::unique_ptr<ScoreCoreFlash>>;
 
     explicit Impl(EngineOptions engine_options)
         : options(normalize_engine_options(std::move(engine_options))),
@@ -242,12 +257,18 @@ public:
                     }
                     return std::make_unique<Core27>(*target_ptr, device, options,
                                                     std::move(constructed.context_cost));
-                } else {
+                } else if constexpr (std::is_same_v<Instance, targets::Qwen3_6_35BA3BInstance>) {
                     if (options.purpose == EnginePurpose::CausalScoring) {
                         return std::make_unique<ScoreCore35>(*target_ptr, device);
                     }
                     return std::make_unique<Core35>(*target_ptr, device, options,
                                                     std::move(constructed.context_cost));
+                } else {
+                    if (options.purpose == EnginePurpose::CausalScoring) {
+                        return std::make_unique<ScoreCoreFlash>(*target_ptr, device);
+                    }
+                    return std::make_unique<CoreFlash>(*target_ptr, device, options,
+                                                       std::move(constructed.context_cost));
                 }
             },
             active);
@@ -356,7 +377,14 @@ std::vector<float> Engine::score_tokens(std::vector<TokenId> tokens, std::uint32
             using CoreState = std::remove_cvref_t<decltype(core)>;
             if constexpr (std::is_same_v<CoreState, std::unique_ptr<Impl::ScoreCore27>> ||
                           std::is_same_v<CoreState, std::unique_ptr<Impl::ScoreCore35>>) {
-                return core->score(std::move(prompt.impl_->value), first_target);
+                return core->score(PreparedPrompt::Impl::take<targets::qwen3_6::PreparedPrompt>(
+                                       prompt.impl_->value),
+                                   first_target);
+            } else if constexpr (std::is_same_v<CoreState, std::unique_ptr<Impl::ScoreCoreFlash>>) {
+                return core->score(
+                    PreparedPrompt::Impl::take<targets::qwen3_8_flash_next::PreparedPrompt>(
+                        prompt.impl_->value),
+                    first_target);
             } else {
                 throw std::logic_error("Engine scoring core is unavailable");
             }
@@ -451,12 +479,23 @@ GenerationHandle Engine::submit(PreparedPrompt prompt, RequestOptions options,
             if constexpr (std::is_same_v<CoreState, std::monostate>) {
                 throw std::logic_error("Engine core is unavailable");
             } else if constexpr (std::is_same_v<CoreState, std::unique_ptr<Impl::ScoreCore27>> ||
-                                 std::is_same_v<CoreState, std::unique_ptr<Impl::ScoreCore35>>) {
+                                 std::is_same_v<CoreState, std::unique_ptr<Impl::ScoreCore35>> ||
+                                 std::is_same_v<CoreState, std::unique_ptr<Impl::ScoreCoreFlash>>) {
                 throw std::logic_error("Engine generation core is unavailable");
+            } else if constexpr (std::is_same_v<CoreState, std::unique_ptr<Impl::CoreFlash>>) {
+                auto submission = core->submit(
+                    PreparedPrompt::Impl::take<targets::qwen3_8_flash_next::PreparedPrompt>(
+                        prompt.impl_->value),
+                    prompt_summary, prepare_seconds, std::move(resolved_options), consumer_mode,
+                    observation, pending_deadline);
+                return GenerationHandle(std::make_unique<GenerationHandle::Impl>(
+                    impl_, std::move(submission), resolved_sampling));
             } else {
-                auto submission = core->submit(std::move(prompt.impl_->value), prompt_summary,
-                                               prepare_seconds, std::move(resolved_options),
-                                               consumer_mode, observation, pending_deadline);
+                auto submission =
+                    core->submit(PreparedPrompt::Impl::take<targets::qwen3_6::PreparedPrompt>(
+                                     prompt.impl_->value),
+                                 prompt_summary, prepare_seconds, std::move(resolved_options),
+                                 consumer_mode, observation, pending_deadline);
                 return GenerationHandle(std::make_unique<GenerationHandle::Impl>(
                     impl_, std::move(submission), resolved_sampling));
             }

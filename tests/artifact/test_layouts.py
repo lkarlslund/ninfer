@@ -10,13 +10,16 @@ from tools.artifact.layouts import (
     assemble_row_planes,
     block_scale_geometry,
     decode_direct,
+    decode_expert_nvfp4_words,
     decode_nvfp4_words,
     decode_row_split_codes,
     dequantize_row_split,
     encode_direct,
+    encode_expert_nvfp4,
     encode_nvfp4,
     encode_row_split,
     encoded_size,
+    expert_block_scale_geometry,
     gather_row_planes,
     row_split_geometry,
     split_row_planes,
@@ -76,6 +79,15 @@ def test_direct_layout_preserves_exact_little_endian_words(
             encode_direct(tensor.float(), format_name)
 
 
+def test_plain_fp8_direct_layout_preserves_exact_words():
+    words = torch.tensor((0x00, 0x80, 0x01, 0x7E), dtype=torch.uint8)
+    tensor = words.view(torch.float8_e4m3fn)
+    payload = encode_direct(tensor, "FP8_E4M3FN")
+    assert payload == bytes((0x00, 0x80, 0x01, 0x7E))
+    decoded = decode_direct(payload, "FP8_E4M3FN", tensor.shape)
+    assert torch.equal(decoded.view(torch.uint8), words)
+
+
 def test_row_split_geometry_and_encoded_size_are_derived_from_format_and_shape():
     geometry = row_split_geometry("Q5G64_F16S", (2, 130))
     assert (
@@ -104,6 +116,28 @@ def test_row_split_geometry_and_encoded_size_are_derived_from_format_and_shape()
         4352,
         0,
     )
+
+
+def test_expert_nvfp4_layout_preserves_each_matrix_and_divisor():
+    shape = (2, 128, 64)
+    geometry = expert_block_scale_geometry("NVFP4", shape)
+    codes = torch.arange(2 * 128 * 32, dtype=torch.int64).to(torch.uint8).reshape(2, 128, 32)
+    scales = (
+        torch.arange(2 * 128 * 4, dtype=torch.int64).remainder(0x7F).to(torch.uint8)
+        .reshape(2, 128, 4)
+    )
+    divisors = torch.tensor((0.5, 2.0), dtype=torch.float32)
+
+    payload = encode_expert_nvfp4(codes, scales, divisors, shape)
+    assert len(payload) == geometry.payload_bytes
+    assert encoded_size("expert-blockscale-k16-m128x4-v1", "NVFP4", shape) == len(payload)
+    decoded_codes, decoded_scales, decoded_divisors = decode_expert_nvfp4_words(payload, shape)
+    assert torch.equal(decoded_codes, codes)
+    assert torch.equal(decoded_scales, scales)
+    assert torch.equal(decoded_divisors, divisors)
+
+    with pytest.raises(ValueError, match="finite and positive"):
+        encode_expert_nvfp4(codes, scales, torch.tensor((0.5, 0.0)), shape)
 
 
 @pytest.mark.parametrize(

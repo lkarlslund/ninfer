@@ -4,6 +4,7 @@
 #include "runtime/engine/context_cost.h"
 #include <ninfer/targets/qwen3_6_27b/package.h>
 #include <ninfer/targets/qwen3_6_35b_a3b/package.h>
+#include <ninfer/targets/qwen3_8_flash_next_125b_a6b/package.h>
 
 #include <memory>
 #include <variant>
@@ -16,6 +17,7 @@ namespace targets {
 
 using Qwen3_6_27B    = qwen3_6_27b::Package;
 using Qwen3_6_35BA3B = qwen3_6_35b_a3b::Package;
+using Qwen3_8FlashNext125BA6B = qwen3_8_flash_next_125b_a6b::Package;
 
 struct LoadedQwen3_6_27B {
     std::unique_ptr<Qwen3_6_27B::LoadedModel> model;
@@ -77,8 +79,35 @@ struct Qwen3_6_35BA3BInstance {
     Qwen3_6_35BA3BInstance& operator=(const Qwen3_6_35BA3BInstance&) = delete;
 };
 
+struct LoadedQwen3_8FlashNext125BA6B {
+    std::unique_ptr<Qwen3_8FlashNext125BA6B::LoadedModel> model;
+    Qwen3_8FlashNext125BA6B::Frontend frontend;
+
+    LoadedQwen3_8FlashNext125BA6B(
+        std::unique_ptr<Qwen3_8FlashNext125BA6B::LoadedModel> stable_model,
+        const EngineOptions& options);
+    ~LoadedQwen3_8FlashNext125BA6B();
+};
+
+struct Qwen3_8FlashNext125BA6BInstance {
+    using Package = Qwen3_8FlashNext125BA6B;
+
+    std::unique_ptr<LoadedQwen3_8FlashNext125BA6B> loaded;
+    runtime::KvCapacityResolution kv_capacity_resolution;
+    const std::uint32_t capacity;
+    std::unique_ptr<Qwen3_8FlashNext125BA6B::Program> program;
+
+    Qwen3_8FlashNext125BA6BInstance(
+        std::unique_ptr<LoadedQwen3_8FlashNext125BA6B> stable_loaded,
+        runtime::KvCapacityResolution resolution,
+        Qwen3_8FlashNext125BA6B::SequencePlan sequence_plan, DeviceContext& device,
+        const StartupObserver& startup_observer);
+    ~Qwen3_8FlashNext125BA6BInstance();
+};
+
 using ActiveTarget =
-    std::variant<std::unique_ptr<Qwen3_6_27BInstance>, std::unique_ptr<Qwen3_6_35BA3BInstance>>;
+    std::variant<std::unique_ptr<Qwen3_6_27BInstance>, std::unique_ptr<Qwen3_6_35BA3BInstance>,
+                 std::unique_ptr<Qwen3_8FlashNext125BA6BInstance>>;
 
 struct ConstructedTarget {
     ActiveTarget active;

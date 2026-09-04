@@ -20,4 +20,19 @@ namespace ninfer::ops {
  */
 void argmax(const Tensor& logits, Tensor& out, std::int32_t valid_rows, cudaStream_t stream);
 
+/**
+ * Selects the exact BF16-head argmax from a broad approximate-logit shortlist.
+ *
+ * Each 512-row tile in [0,valid_rows) contributes its eight best approximate rows. The Op
+ * remaps those rows through `id_map`, evaluates their complete FP32-accumulated dot products
+ * against the contiguous BF16 exact head, and returns the best exact token per column.
+ * `candidate_ids` and `candidate_scores` are caller-owned scratch tensors of shape
+ * [8*ceil(valid_rows/512),T].
+ */
+void shortlist_exact_argmax(const Tensor& hidden, const Tensor& approximate_logits,
+                            std::int32_t valid_rows,
+                            const Weight& exact_head, const std::int32_t* id_map,
+                            Tensor& candidate_ids, Tensor& candidate_scores, Tensor& out,
+                            cudaStream_t stream);
+
 } // namespace ninfer::ops

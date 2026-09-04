@@ -86,6 +86,12 @@ W8Launch select_w8_a16_launch(std::int32_t n, std::int32_t k, std::int32_t t) {
             }
             if (t <= 871) { return launch_w8_mma_r32_c128; }
             return launch_w8_mma_r64_c128;
+        case 2560:
+            if (t <= 14 || t == 16 || t == 20 || t == 24 || t == 28 || t == 32) {
+                return launch_w8_simt_r8_c4;
+            }
+            if (t <= 871) { return launch_w8_mma_r32_c128; }
+            return launch_w8_mma_r64_c128;
         case 4608:
             if (t <= 8 || t == 12) { return launch_w8_simt_r8_c4; }
             if (t <= 256) { return launch_w8_mma_r32_c128; }

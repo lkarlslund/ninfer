@@ -65,6 +65,13 @@ Q4Launch select_q4_a16_launch(std::int32_t n, std::int32_t k, std::int32_t t) {
             return launch_q4_mma_r64_c128;
         }
         break;
+    case 2560:
+        if (n == 131072 || n == 147456) {
+            if (t == 1) { return launch_q4_gemv_r4_w1_direct; }
+            if (t <= 20) { return launch_q4_draft_head_small_t; }
+            return launch_q4_mma_r64_c128;
+        }
+        break;
     case 1152:
         if (t < 4 || t > 131072 || (t % 4) != 0) { break; }
         switch (n) {

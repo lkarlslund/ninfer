@@ -267,11 +267,13 @@ std::uint32_t BenchTest::requested_output_tokens() const {
 }
 
 std::uint32_t BenchTest::required_context(std::uint32_t mtp_draft_tokens) const {
+    (void)mtp_draft_tokens;
     const std::uint64_t prompt =
         static_cast<std::uint64_t>(kind == TestKind::Decode ? kDecodeSeedTokens : n_prompt);
-    const std::uint64_t decode     = static_cast<std::uint64_t>(has_decode() ? n_gen : 0);
-    const std::uint64_t mtp_margin = mtp_draft_tokens == 0 ? 0 : 2ULL * mtp_draft_tokens;
-    return checked_context(prompt + decode + mtp_margin, "benchmark context requirement");
+    const std::uint64_t decode = static_cast<std::uint64_t>(has_decode() ? n_gen : 0);
+    // The runtime clamps every speculative extent to capacity - frontier - 1. Rejected drafts
+    // are transient work inside that licensed range, not additional sequence capacity.
+    return checked_context(prompt + decode, "benchmark context requirement");
 }
 
 std::string usage_text(std::string_view program) {
@@ -851,6 +853,8 @@ std::string kv_cache_name(KvCacheStorage storage) {
     switch (storage) {
     case KvCacheStorage::BFloat16:
         return "bf16";
+    case KvCacheStorage::BFloat16KeyValue:
+        return "bf16-kv";
     case KvCacheStorage::Int8Group64:
         return "int8-group64";
     case KvCacheStorage::Fp8E4M3Row256:

@@ -24,6 +24,7 @@ struct PagedKVLayerView {
     Tensor k_scale_pages;
     Tensor v_scale_pages;
     Tensor block_table;
+    std::vector<Tensor> auxiliary_pages;
     std::int32_t head_dim     = 0;
     std::int32_t num_kv_heads = 0;
     KvCacheStorage storage    = KvCacheStorage::BFloat16;
@@ -36,6 +37,7 @@ struct PagedKVBatchLayerView {
     Tensor k_scale_pages;
     Tensor v_scale_pages;
     Tensor block_tables;
+    std::vector<Tensor> auxiliary_pages;
     std::int32_t head_dim     = 0;
     std::int32_t num_kv_heads = 0;
     KvCacheStorage storage    = KvCacheStorage::BFloat16;

@@ -66,6 +66,32 @@ void launch_recurrent_batch_update_fixed(const Tensor& q, const Tensor& k, const
     CUDA_CHECK(cudaGetLastError());
 }
 
+template <bool NormalizeInputs>
+void launch_recurrent_batch_update_packed_fixed(
+    const Tensor& packed_qkv, const Tensor& g, const Tensor& beta, float scale,
+    Tensor& ssm_states, const Tensor& source_state_slots,
+    const Tensor& destination_state_slots, Tensor& out, cudaStream_t stream) {
+    constexpr int kQkHeads = 16;
+    constexpr int kValueHeads = 48;
+    using Access = PackedBatchUpdateAccess<kQkHeads, kValueHeads>;
+    const int batch = packed_qkv.ne[1];
+    const dim3 grid(kValueHeads, static_cast<unsigned>(batch),
+                    static_cast<unsigned>(kStateDim / kBlockDv));
+    const dim3 block(kWarpSize, kNumWarps, 1);
+    const std::int64_t state_slot_stride =
+        static_cast<std::int64_t>(kStateDim) * kStateDim * ssm_states.ne[2];
+    const Access access{
+        static_cast<const __nv_bfloat16*>(packed_qkv.data),
+        static_cast<const float*>(g.data), static_cast<const float*>(beta.data),
+        static_cast<const float*>(ssm_states.data), static_cast<float*>(ssm_states.data),
+        static_cast<const std::int32_t*>(source_state_slots.data),
+        static_cast<const std::int32_t*>(destination_state_slots.data),
+        static_cast<__nv_bfloat16*>(out.data), head_map::of(kQkHeads, kValueHeads),
+        state_slot_stride, scale};
+    recurrent_batch_update_kernel<NormalizeInputs, Access><<<grid, block, 0, stream>>>(access);
+    CUDA_CHECK(cudaGetLastError());
+}
+
 template <bool Masked>
 void launch_recurrent_record_fixed(const Tensor& q, const Tensor& k, const Tensor& v,
                                    const Tensor& g, const Tensor& beta, float scale,
@@ -128,6 +154,20 @@ void launch_replay_fold_fixed(const GdnReplayRecords& records,
 }
 
 } // namespace
+
+void launch_recurrent_batch_update_packed_qkv(
+    const Tensor& packed_qkv, std::int32_t qk_heads, std::int32_t value_heads,
+    const Tensor& g, const Tensor& beta, float scale, Tensor& ssm_states,
+    const Tensor& source_state_slots, const Tensor& destination_state_slots,
+    Tensor& out, cudaStream_t stream) {
+    if (qk_heads != 16 || value_heads != 48 || packed_qkv.ne[0] != 10240 ||
+        packed_qkv.ne[1] <= 0 || packed_qkv.ne[1] > 8 || !packed_qkv.is_contiguous()) {
+        throw std::invalid_argument("packed GDN batch update: unsupported exact geometry");
+    }
+    launch_recurrent_batch_update_packed_fixed<true>(
+        packed_qkv, g, beta, scale, ssm_states, source_state_slots,
+        destination_state_slots, out, stream);
+}
 
 void launch_recurrent(const Tensor& q, const Tensor& k, const Tensor& v, const Tensor& g,
                       const Tensor& beta, float scale, bool normalize_qk, Tensor& ssm_state,
@@ -202,6 +242,13 @@ void launch_replay_fold(const GdnReplayRecords& records, LinearAttentionStateAll
         records.spec.value_heads == FoldGeometry30x32::kValueHeads &&
         records.spec.conv_channels == FoldGeometry30x32::kConvChannels) {
         launch_replay_fold_fixed<FoldGeometry30x32>(records, states, rows, active_rows, stream);
+        return;
+    }
+    if (records.spec.layers == FoldGeometry36x48::kLayers &&
+        records.spec.qk_heads == FoldGeometry36x48::kQkHeads &&
+        records.spec.value_heads == FoldGeometry36x48::kValueHeads &&
+        records.spec.conv_channels == FoldGeometry36x48::kConvChannels) {
+        launch_replay_fold_fixed<FoldGeometry36x48>(records, states, rows, active_rows, stream);
         return;
     }
     throw std::invalid_argument("GDN replay fold launcher received an unregistered geometry");

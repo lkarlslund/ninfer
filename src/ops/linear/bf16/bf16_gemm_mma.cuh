@@ -331,4 +331,209 @@ __global__ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocks) void bf16
     }
 }
 
+// Persistent expert-grouped BF16 GEMM. Each job names one contiguous run of packed tokens for an
+// expert; CTAs walk the expert's output-row tiles without host dispatch or one kernel launch per
+// expert. The packed activation and destination layouts remain the ordinary column-major NInfer
+// activation layout, while weights are expert-major row-major matrices.
+template <class Geometry, class Schedule>
+__global__ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocks)
+void bf16_grouped_gemm_mma_kernel(const __nv_bfloat16* __restrict__ packed_x,
+                                  const __nv_bfloat16* __restrict__ expert_weights,
+                                  const int* __restrict__ offsets,
+                                  const int* __restrict__ job_experts,
+                                  const int* __restrict__ job_columns,
+                                  const int* __restrict__ job_count,
+                                  __nv_bfloat16* __restrict__ packed_output) {
+    constexpr int M       = Geometry::kOutputRows;
+    constexpr int K       = Geometry::kInputRows;
+    constexpr int BM      = Schedule::kBlockRows;
+    constexpr int BN      = Schedule::kBlockCols;
+    constexpr int BK      = Schedule::kBlockK;
+    constexpr int WM      = Schedule::kWarpRows;
+    constexpr int WN      = Schedule::kWarpCols;
+    constexpr int MT      = Schedule::kMmaRows;
+    constexpr int NT      = Schedule::kMmaCols;
+    constexpr int KSUB    = Schedule::kMmaK;
+    constexpr int S       = Schedule::kPipelineStages;
+    constexpr int WARPS_N = Schedule::kWarpsN;
+    constexpr int THREADS = Schedule::kThreads;
+    constexpr int TILES_M = M / BM;
+    static_assert(M % BM == 0);
+    static_assert(K % BK == 0);
+    static_assert(K / BK >= S);
+
+    extern __shared__ __align__(16) unsigned char shared_raw[];
+    auto* As = reinterpret_cast<__nv_bfloat16*>(shared_raw);
+    auto* Bs = As + S * BM * BK;
+
+    const int tid  = static_cast<int>(threadIdx.x);
+    const int warp = tid >> 5;
+    const int lane = tid & 31;
+    const int wm   = warp / WARPS_N;
+    const int wn   = warp - wm * WARPS_N;
+    const int gid  = lane >> 2;
+    const int lid  = lane & 3;
+
+    const int a_matrix     = lane >> 3;
+    const int a_inner_row  = lane & 7;
+    const int a_row_offset = a_inner_row + ((a_matrix & 1) << 3);
+    const int a_col_offset = (a_matrix >> 1) << 3;
+    const int b_inner_row  = lane & 7;
+    const int b_k_offset   = ((lane >> 3) & 1) << 3;
+
+    const int work_count = *job_count * TILES_M;
+    for (int work = static_cast<int>(blockIdx.x); work < work_count;
+         work += static_cast<int>(gridDim.x)) {
+        const int job = work / TILES_M;
+        const int tile_m = work - job * TILES_M;
+        const int expert = job_experts[job];
+        const int m0 = tile_m * BM;
+        const int n0 = offsets[expert] + job_columns[job];
+        const int n_end = min(n0 + BN, offsets[expert + 1]);
+        const auto* weight = expert_weights + static_cast<std::int64_t>(expert) * M * K;
+        float accum[MT][NT][4] = {};
+
+        auto stage_inputs = [&](int stage, int k_tile) {
+            const int k0 = k_tile * BK;
+            auto* a_stage = As + stage * BM * BK;
+            auto* b_stage = Bs + stage * BN * BK;
+
+#pragma unroll 1
+            for (int item = tid; item < BM * (BK / 8); item += THREADS) {
+                const int row = item / (BK / 8);
+                const int k8 = item - row * (BK / 8);
+                const int kk = k8 * 8;
+                cp_async<16, Schedule::kWeightCache>(
+                    &a_stage[row * BK + bf16_mma_shared_col<Schedule>(row, kk)],
+                    &weight[static_cast<std::int64_t>(m0 + row) * K + k0 + kk]);
+            }
+#pragma unroll 1
+            for (int item = tid; item < BN * (BK / 8); item += THREADS) {
+                const int col = item / (BK / 8);
+                const int k8 = item - col * (BK / 8);
+                const int kk = k8 * 8;
+                const int token = n0 + col;
+                auto* destination =
+                    &b_stage[col * BK + bf16_mma_shared_col<Schedule>(col, kk)];
+                const bool valid = token < n_end;
+                cp_async_zfill<16, Schedule::kActivationCache>(
+                    destination,
+                    &packed_x[static_cast<std::int64_t>(valid ? token : 0) * K + k0 + kk],
+                    valid ? 16 : 0);
+            }
+        };
+
+        constexpr int kTiles = K / BK;
+#pragma unroll
+        for (int stage = 0; stage < S; ++stage) {
+            stage_inputs(stage, stage);
+            cp_commit();
+        }
+#pragma unroll 1
+        for (int k_tile = 0; k_tile < kTiles; ++k_tile) {
+            const int stage = k_tile % S;
+            if (k_tile + S <= kTiles) {
+                cp_wait<S - 1>();
+            } else {
+                cp_wait<0>();
+            }
+            __syncthreads();
+
+            auto load_fragments = [&](int k_step, unsigned(&a_frag)[MT][4],
+                                      unsigned(&b_frag)[NT][2]) {
+#pragma unroll
+                for (int mi = 0; mi < MT; ++mi) {
+                    const int row = wm * WM + mi * 16 + a_row_offset;
+                    const int col = k_step * 16 + a_col_offset;
+                    ldmatrix_x4(
+                        a_frag[mi][0], a_frag[mi][1], a_frag[mi][2], a_frag[mi][3],
+                        smem_addr(&As[stage * BM * BK + row * BK +
+                                      bf16_mma_shared_col<Schedule>(row, col)]));
+                }
+#pragma unroll
+                for (int ni = 0; ni < NT; ++ni) {
+                    const int row = wn * WN + ni * 8 + b_inner_row;
+                    const int col = k_step * 16 + b_k_offset;
+                    ldmatrix_x2(
+                        b_frag[ni][0], b_frag[ni][1],
+                        smem_addr(&Bs[stage * BN * BK + row * BK +
+                                      bf16_mma_shared_col<Schedule>(row, col)]));
+                }
+            };
+
+            if constexpr (Schedule::kFragmentPipeline == Bf16MmaFragmentPipeline::PingPong) {
+                unsigned a_frag[2][MT][4];
+                unsigned b_frag[2][NT][2];
+                load_fragments(0, a_frag[0], b_frag[0]);
+#pragma unroll
+                for (int k_step = 0; k_step < KSUB; ++k_step) {
+                    const int slot = k_step & 1;
+                    if (k_step + 1 < KSUB) {
+                        load_fragments(k_step + 1, a_frag[slot ^ 1], b_frag[slot ^ 1]);
+                    }
+#pragma unroll
+                    for (int mi = 0; mi < MT; ++mi) {
+#pragma unroll
+                        for (int ni = 0; ni < NT; ++ni) {
+                            mma_bf16(accum[mi][ni][0], accum[mi][ni][1], accum[mi][ni][2],
+                                     accum[mi][ni][3], a_frag[slot][mi][0],
+                                     a_frag[slot][mi][1], a_frag[slot][mi][2],
+                                     a_frag[slot][mi][3], b_frag[slot][ni][0],
+                                     b_frag[slot][ni][1]);
+                        }
+                    }
+                }
+            } else {
+                unsigned a_frag[MT][4];
+                unsigned b_frag[NT][2];
+#pragma unroll
+                for (int k_step = 0; k_step < KSUB; ++k_step) {
+                    load_fragments(k_step, a_frag, b_frag);
+#pragma unroll
+                    for (int mi = 0; mi < MT; ++mi) {
+#pragma unroll
+                        for (int ni = 0; ni < NT; ++ni) {
+                            mma_bf16(accum[mi][ni][0], accum[mi][ni][1], accum[mi][ni][2],
+                                     accum[mi][ni][3], a_frag[mi][0], a_frag[mi][1],
+                                     a_frag[mi][2], a_frag[mi][3], b_frag[ni][0],
+                                     b_frag[ni][1]);
+                        }
+                    }
+                }
+            }
+            __syncthreads();
+            const int next = k_tile + S;
+            if (next < kTiles) {
+                stage_inputs(stage, next);
+                cp_commit();
+            }
+        }
+
+#pragma unroll
+        for (int mi = 0; mi < MT; ++mi) {
+            const int row0 = m0 + wm * WM + mi * 16 + gid;
+            const int row1 = row0 + 8;
+#pragma unroll
+            for (int ni = 0; ni < NT; ++ni) {
+                const int token0 = n0 + wn * WN + ni * 8 + 2 * lid;
+                const int token1 = token0 + 1;
+                const float* value = accum[mi][ni];
+                if (token0 < n_end) {
+                    packed_output[row0 + static_cast<std::int64_t>(M) * token0] =
+                        __float2bfloat16_rn(value[0]);
+                    packed_output[row1 + static_cast<std::int64_t>(M) * token0] =
+                        __float2bfloat16_rn(value[2]);
+                }
+                if (token1 < n_end) {
+                    packed_output[row0 + static_cast<std::int64_t>(M) * token1] =
+                        __float2bfloat16_rn(value[1]);
+                    packed_output[row1 + static_cast<std::int64_t>(M) * token1] =
+                        __float2bfloat16_rn(value[3]);
+                }
+            }
+        }
+        __syncthreads();
+    }
+}
+
 } // namespace ninfer::ops::detail

@@ -71,6 +71,8 @@ add_library(ninfer_ops STATIC
   ops/launcher/embed_gather.cu
   ops/launcher/gdn_gating.cu
   ops/launcher/gelu.cu
+  ops/launcher/flash_next_ple.cu
+  ops/launcher/hyperconnection.cu
   ops/launcher/l2norm.cu
   ops/launcher/layer_norm.cu
   ops/launcher/mtp_pack.cu
@@ -105,12 +107,14 @@ add_library(ninfer_ops STATIC
   ops/softmax_attention/dense/context/launch.cu
   ops/softmax_attention/sliding_window/sliding_window_attention.cpp
   ops/softmax_attention/sliding_window/launch.cu
+  ops/softmax_attention/qsa/flash_next_qsa.cu
   ops/kv_cache/append/kv_cache_append.cpp
   ops/kv_cache/append/launch.cu
   ops/kv_cache/append/nvfp4_launch.cu
   ops/kv_cache/append/k8v4_launch.cu
   # Gated DeltaNet Linear Attention core.
   ops/linear_attention/gated_delta_net/gated_delta_net.cpp
+  ops/linear_attention/flash_next_gdn.cu
   ops/linear_attention/gated_delta_net/replay.cpp
   ops/linear_attention/gated_delta_net/recurrent.cu
   ops/linear_attention/gated_delta_net/chunked/launch.cu
@@ -166,6 +170,7 @@ add_library(ninfer_ops STATIC
   ops/linear/bf16/bf16_gemm_mma.cu
   ops/linear/bf16/bf16_small_t.cu
   ops/linear/bf16/bf16_dispatch.cpp
+  ops/linear/bf16/bf16_cublas.cpp
   ops/linear/fp8/fp8_format.cpp
   ops/linear/fp8/fp8_gemv.cu
   ops/linear/fp8/fp8_small_t.cu
@@ -237,6 +242,7 @@ add_library(ninfer_ops STATIC
   ops/linear_pair/w8/w8_pair_gemm_splitk.cu
   ops/linear_pair/w8/w8_pair_plan.cpp
   ops/sparse_moe/decode/sparse_moe_decode_kernels.cu
+  ops/sparse_moe/flash_next/flash_next_moe.cu
   ops/sparse_moe/decode/sparse_moe_decode_plan.cpp
   ops/sparse_moe/prefill/sparse_moe_prefill_kernels.cu
   ops/sparse_moe/prefill/sparse_moe_prefill_plan.cpp
@@ -277,7 +283,7 @@ add_library(ninfer_ops STATIC
   ops/wrapper/vision_pos_embed.cpp)
 ninfer_internal_includes(ninfer_ops)
 ninfer_cuda_archive(ninfer_ops)
-target_link_libraries(ninfer_ops PUBLIC ninfer_core PRIVATE ninfer_nvfp4_non_rdc)
+target_link_libraries(ninfer_ops PUBLIC ninfer_core PRIVATE ninfer_nvfp4_non_rdc CUDA::cublas)
 
 # Product-independent text and media mechanisms.
 add_library(ninfer_text STATIC
@@ -327,6 +333,8 @@ target_include_directories(ninfer_engine PUBLIC ${PROJECT_SOURCE_DIR}/include)
 add_subdirectory(targets/qwen3_6)
 add_subdirectory(targets/qwen3_6_27b)
 add_subdirectory(targets/qwen3_6_35b_a3b)
+add_subdirectory(targets/qwen3_8_flash_next)
+add_subdirectory(targets/qwen3_8_flash_next_125b_a6b)
 
 target_link_libraries(ninfer_engine
   PRIVATE

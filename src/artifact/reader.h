@@ -27,6 +27,7 @@ enum class NumericFormat {
     Q6G64_F16S,
     W8G32_F16S,
     NVFP4,
+    FP8_E4M3FN,
     FP8_E4M3FN_ROW_BF16S,
 };
 
@@ -34,6 +35,7 @@ enum class StorageLayout {
     ContiguousLeV1,
     RowSplitK128V1,
     BlockScaleK16M128x4V1,
+    ExpertBlockScaleK16M128x4V1,
     RowScaleV1,
 };
 
@@ -80,7 +82,22 @@ struct BlockScaleGeometry {
     std::uint64_t encoded_bytes         = 0;
 };
 
+struct ExpertBlockScaleGeometry {
+    std::uint64_t experts               = 0;
+    std::uint64_t rows                  = 0;
+    std::uint64_t columns               = 0;
+    std::uint64_t groups_per_row        = 0;
+    std::uint64_t code_plane_bytes      = 0;
+    std::uint64_t scale_plane_offset    = 0;
+    std::uint64_t scale_plane_bytes     = 0;
+    std::uint64_t divisor_plane_offset  = 0;
+    std::uint64_t divisor_plane_bytes   = 0;
+    std::uint64_t encoded_bytes         = 0;
+};
+
 BlockScaleGeometry block_scale_geometry(NumericFormat format, std::span<const std::uint64_t> shape);
+ExpertBlockScaleGeometry expert_block_scale_geometry(
+    NumericFormat format, std::span<const std::uint64_t> shape);
 
 struct RowScaleGeometry {
     std::uint64_t rows               = 0;
@@ -136,8 +153,8 @@ public:
 
     Reader(Reader&&) noexcept;
     Reader& operator=(Reader&&) noexcept;
-    Reader(const Reader&)            = delete;
-    Reader& operator=(const Reader&) = delete;
+    Reader(const Reader&)            = default;
+    Reader& operator=(const Reader&) = default;
 
     const ArtifactIdentity& identity() const noexcept;
     const std::vector<ObjectDescriptor>& objects() const noexcept;
@@ -151,7 +168,7 @@ public:
 
 private:
     struct Impl;
-    std::unique_ptr<Impl> impl_;
+    std::shared_ptr<Impl> impl_;
 };
 
 } // namespace ninfer::artifact

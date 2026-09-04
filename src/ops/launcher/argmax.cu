@@ -57,6 +57,39 @@ void argmax_launch(const Tensor& logits, Tensor& out, std::int32_t valid_rows,
                                tiled_block_for(physical_rows, valid_rows, t_count), stream);
 }
 
+void shortlist_exact_argmax_launch(const Tensor& hidden, const Tensor& approximate_logits,
+                                   std::int32_t valid_rows,
+                                   const Weight& exact_head, const std::int32_t* id_map,
+                                   Tensor& candidate_ids, Tensor& candidate_scores, Tensor& out,
+                                   cudaStream_t stream) {
+    const int shortlist_rows = valid_rows;
+    const int physical_rows = approximate_logits.ne[0];
+    const int tokens = approximate_logits.ne[1];
+    const int tiles = div_up(shortlist_rows, kShortlistRerankTile);
+    const int candidate_rows = tiles * kShortlistCandidatesPerTile;
+    shortlist_tile_candidates_kernel<<<dim3(static_cast<unsigned>(tiles),
+                                              static_cast<unsigned>(tokens)),
+                                       kShortlistRerankTile, 0, stream>>>(
+        static_cast<const __nv_bfloat16*>(approximate_logits.data), id_map,
+        static_cast<std::int32_t*>(candidate_ids.data), shortlist_rows, physical_rows,
+        candidate_rows);
+    CUDA_CHECK(cudaGetLastError());
+    shortlist_exact_scores_kernel<<<dim3(static_cast<unsigned>(candidate_rows),
+                                          static_cast<unsigned>(tokens)),
+                                   256, 0, stream>>>(
+        static_cast<const __nv_bfloat16*>(hidden.data),
+        static_cast<const __nv_bfloat16*>(exact_head.qdata),
+        static_cast<const std::int32_t*>(candidate_ids.data),
+        static_cast<float*>(candidate_scores.data), hidden.ne[0], candidate_rows);
+    CUDA_CHECK(cudaGetLastError());
+    shortlist_exact_select_kernel<<<static_cast<unsigned>(tokens), kShortlistRerankTile, 0,
+                                    stream>>>(
+        static_cast<const float*>(candidate_scores.data),
+        static_cast<const std::int32_t*>(candidate_ids.data),
+        static_cast<std::int32_t*>(out.data), candidate_rows);
+    CUDA_CHECK(cudaGetLastError());
+}
+
 namespace {
 
 void argmax_tiled_atomic_launch(const Tensor& logits, Tensor& out, std::int32_t valid_rows,
