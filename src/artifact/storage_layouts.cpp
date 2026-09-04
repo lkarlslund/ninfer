@@ -86,6 +86,8 @@ std::string_view format_name(NumericFormat format) noexcept {
         return "FP8_E4M3FN";
     case NumericFormat::FP8_E4M3FN_ROW_BF16S:
         return "FP8_E4M3FN_ROW_BF16S";
+    case NumericFormat::FP8_E4M3FN_BLOCK128_F32S:
+        return "FP8_E4M3FN_BLOCK128_F32S";
     }
     return {};
 }
@@ -102,6 +104,8 @@ std::string_view layout_name(StorageLayout layout) noexcept {
         return "expert-blockscale-k16-m128x4-v1";
     case StorageLayout::RowScaleV1:
         return "row-scale-v1";
+    case StorageLayout::BlockScaleK128M128V1:
+        return "blockscale-k128-m128-v1";
     }
     return {};
 }
@@ -146,6 +150,9 @@ std::uint64_t tensor_encoded_size(StorageLayout layout, NumericFormat format,
     }
     if (layout == StorageLayout::RowScaleV1) {
         return row_scale_geometry(format, shape).encoded_bytes;
+    }
+    if (layout == StorageLayout::BlockScaleK128M128V1) {
+        return fp8_block_scale_geometry(format, shape).encoded_bytes;
     }
     throw ArtifactError("unknown tensor layout");
 }
@@ -254,6 +261,32 @@ RowScaleGeometry row_scale_geometry(NumericFormat format, std::span<const std::u
     out.scale_plane_bytes = checked_mul(out.rows, 2, "FP8 scale plane bytes");
     out.encoded_bytes =
         checked_add(out.scale_plane_offset, out.scale_plane_bytes, "FP8 tensor encoded size");
+    return out;
+}
+
+Fp8BlockScaleGeometry fp8_block_scale_geometry(
+    NumericFormat format, std::span<const std::uint64_t> shape) {
+    if (format != NumericFormat::FP8_E4M3FN_BLOCK128_F32S) {
+        throw ArtifactError("blockscale-k128-m128-v1 requires FP8_E4M3FN_BLOCK128_F32S");
+    }
+    if (shape.size() != 2 || shape[0] == 0 || shape[1] == 0 || shape[0] % 128 != 0 ||
+        shape[1] % 128 != 0) {
+        throw ArtifactError(
+            "blockscale-k128-m128-v1 requires a positive rank-two shape divisible by 128");
+    }
+    Fp8BlockScaleGeometry out;
+    out.rows               = shape[0];
+    out.columns            = shape[1];
+    out.scale_rows         = shape[0] / 128;
+    out.scale_columns      = shape[1] / 128;
+    out.code_plane_bytes   = checked_mul(out.rows, out.columns, "block FP8 element count");
+    out.scale_plane_offset =
+        align_up(out.code_plane_bytes, kTensorAlignment, "block FP8 scale plane offset");
+    out.scale_plane_bytes = checked_mul(
+        checked_mul(out.scale_rows, out.scale_columns, "block FP8 scale count"), 4,
+        "block FP8 scale bytes");
+    out.encoded_bytes =
+        checked_add(out.scale_plane_offset, out.scale_plane_bytes, "block FP8 encoded size");
     return out;
 }
 

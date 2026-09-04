@@ -1,6 +1,7 @@
 #pragma once
 
 #include "artifact/binder.h"
+#include <ninfer/targets/qwen3_8_flash_next_125b_a6b/package.h>
 #include <ninfer/targets/qwen3_8_flash_next/startup_features.h>
 
 #include <array>
@@ -10,6 +11,7 @@ namespace ninfer::targets::qwen3_8_flash_next_125b_a6b {
 
 inline constexpr char kModelId[]   = "qwen3.8-flash-next-125b-a6b";
 inline constexpr char kWeightsId[] = "nvfp4";
+inline constexpr char kMixedWeightsId[] = "nvfp4-fp8-proj";
 inline constexpr char kPleTableName[] =
     "model.language_model.layers.1.ple.ple_embedding.ngram_embedding.weight";
 inline constexpr std::size_t kTextLayers          = 48;
@@ -130,6 +132,7 @@ struct VisionPlan {
 
 struct BindingPlan {
     qwen3_8_flash_next::StartupFeatures features;
+    artifact::NumericFormat projection_format = artifact::NumericFormat::BF16;
     std::array<artifact::ObjectHandle, 6> frontend;
     artifact::ObjectHandle token_embedding;
     std::array<TextLayerPlan, kTextLayers> text_layers;
@@ -148,6 +151,7 @@ struct ArtifactLoadPlan {
 };
 
 ArtifactLoadPlan plan_artifact(artifact::Binder& binder,
-                               qwen3_8_flash_next::StartupFeatures features = {});
+                               qwen3_8_flash_next::StartupFeatures features = {},
+                               detail::WeightsProfile profile = detail::WeightsProfile::Nvfp4);
 
 } // namespace ninfer::targets::qwen3_8_flash_next_125b_a6b

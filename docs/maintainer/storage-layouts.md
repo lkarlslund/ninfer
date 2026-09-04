@@ -15,6 +15,7 @@ The storage registry contains exactly these identities:
 | `row-split-k128-v1` | tensor layout | `Q4G64_F16S`, `Q5G64_F16S`, `Q6G64_F16S`, `W8G32_F16S` | rank 2 `[N,K]` | 256 bytes |
 | `blockscale-k16-m128x4-v1` | tensor layout | `NVFP4` | rank 2 `[N,K]`, `N % 128 == 0`, `K % 64 == 0` | 256 bytes |
 | `row-scale-v1` | tensor layout | `FP8_E4M3FN_ROW_BF16S` | rank 2 `[N,K]` | 256 bytes |
+| `blockscale-k128-m128-v1` | tensor layout | `FP8_E4M3FN_BLOCK128_F32S` | rank 2 `[N,K]`, `N % 128 == 0`, `K % 128 == 0` | 256 bytes |
 | `raw-bytes-v1` | resource encoding | not applicable | nonempty byte string | 1 byte |
 
 These are closed identities, not templates. A format/layout combination not present in the table is
@@ -22,6 +23,11 @@ unsupported. In particular, a direct format cannot use a quantized layout, group
 signed-integer formats cannot use `contiguous-le-v1`, and `NVFP4` cannot use
 `row-split-k128-v1`. `FP8_E4M3FN_ROW_BF16S` can use only `row-scale-v1`; a bare E4M3FN code plane
 is not a compatible direct tensor.
+
+`blockscale-k128-m128-v1` stores an `N*K`-byte row-major E4M3FN code plane, zero padding to the
+next 256-byte boundary, then a row-major FP32 multiplier matrix `[N/128,K/128]`. There is no
+trailing padding inside the object. Logical weight `[n,k]` is the decoded code multiplied by scale
+`[n/128,k/128]`.
 
 Object alignment applies to the object's payload-relative `offset` in the `.ninfer` JSON. Internal
 plane offsets and padding belong to the selected layout. Inter-object padding belongs to the

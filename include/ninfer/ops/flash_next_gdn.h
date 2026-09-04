@@ -25,7 +25,8 @@ struct FlashNextGdnWeights {
     Weight output;
 };
 
-[[nodiscard]] std::size_t flash_next_gdn_workspace_capacity_bytes(std::int32_t tokens);
+[[nodiscard]] std::size_t flash_next_gdn_workspace_capacity_bytes(
+    std::int32_t tokens, QType projection_qtype = QType::BF16_CTRL);
 
 // Exact single-sequence Flash-Next Gated DeltaNet block. The input is the 2560-row HC block
 // stream. The width-three BF16 convolution state and [128,128,48] FP32 recurrence state are

@@ -236,6 +236,8 @@ const char* qtype_name(QType qtype) {
         return "NVFP4";
     case QType::FP8_E4M3FN_ROW_BF16S:
         return "FP8";
+    case QType::FP8_E4M3FN_BLOCK128_F32S:
+        return "FP8_BLOCK";
     default:
         break;
     }
@@ -258,6 +260,9 @@ QType parse_qtype(std::string_view text) {
     if (value == "bf16" || value == "bf16_ctrl") { return QType::BF16_CTRL; }
     if (value == "nvfp4") { return QType::NVFP4; }
     if (value == "fp8" || value == "fp8_e4m3fn_row_bf16s") { return QType::FP8_E4M3FN_ROW_BF16S; }
+    if (value == "fp8_block" || value == "fp8_e4m3fn_block128_f32s") {
+        return QType::FP8_E4M3FN_BLOCK128_F32S;
+    }
     throw std::invalid_argument("unknown qtype: " + std::string(text));
 }
 
@@ -510,6 +515,11 @@ LinearBenchWeight make_weight(QType qtype, std::int32_t n, std::int32_t k) {
     if (qtype == QType::FP8_E4M3FN_ROW_BF16S) {
         bench::PackedQuantizedWeight packed = bench::make_fp8_weight(n, k);
         const std::uint64_t model_bytes     = packed.model_weight_bytes();
+        return {std::move(packed.storage), packed.weight, model_bytes};
+    }
+    if (qtype == QType::FP8_E4M3FN_BLOCK128_F32S) {
+        bench::PackedQuantizedWeight packed = bench::make_fp8_block_weight(n, k);
+        const std::uint64_t model_bytes = packed.model_weight_bytes();
         return {std::move(packed.storage), packed.weight, model_bytes};
     }
     const std::uint64_t padded_k_u64 = align_up(static_cast<std::uint64_t>(k), 128);

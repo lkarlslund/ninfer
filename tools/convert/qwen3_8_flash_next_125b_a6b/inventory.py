@@ -12,17 +12,20 @@ from tools.convert.qwen3_6.common.inventory import (
 
 MODEL_ID = "qwen3.8-flash-next-125b-a6b"
 WEIGHTS_ID = "nvfp4"
+MIXED_WEIGHTS_ID = "nvfp4-fp8-proj"
 TARGET_KEY = "qwen3_8_flash_next_125b_a6b"
 
 BF16 = "BF16"
 FP32 = "FP32"
 FP8 = "FP8_E4M3FN"
 NVFP4 = "NVFP4"
+FP8_BLOCK = "FP8_E4M3FN_BLOCK128_F32S"
 Q4 = "Q4G64_F16S"
 I32 = "I32"
 CONTIGUOUS = "contiguous-le-v1"
 ROW_SPLIT = "row-split-k128-v1"
 EXPERT_NVFP4 = "expert-blockscale-k16-m128x4-v1"
+BLOCK_FP8 = "blockscale-k128-m128-v1"
 
 LAYERS = tuple(range(48))
 FULL_ATTENTION_LAYERS = tuple(range(3, 48, 4))
@@ -189,6 +192,30 @@ TENSOR_SPECS = TEXT_TENSOR_SPECS + MTP_TENSOR_SPECS + VISION_TENSOR_SPECS
 OBJECT_SPECS: tuple[StoredObjectSpec, ...] = RESOURCE_SPECS + TENSOR_SPECS
 
 
+def _is_mixed_projection(name: str) -> bool:
+    if not name.startswith("model.language_model.layers."):
+        return False
+    return name.endswith(
+        (
+            ".self_attn.q_proj.weight",
+            ".self_attn.k_proj.weight",
+            ".self_attn.v_proj.weight",
+            ".self_attn.o_proj.weight",
+            ".linear_attn.in_proj_qkv.weight",
+            ".linear_attn.in_proj_z.weight",
+            ".linear_attn.out_proj.weight",
+        )
+    )
+
+
+MIXED_TENSOR_SPECS = tuple(
+    TensorSpec(spec.name, spec.shape, FP8_BLOCK, BLOCK_FP8) if _is_mixed_projection(spec.name)
+    else spec
+    for spec in TENSOR_SPECS
+)
+MIXED_OBJECT_SPECS: tuple[StoredObjectSpec, ...] = RESOURCE_SPECS + MIXED_TENSOR_SPECS
+
+
 __all__ = [
     "EXPERTS",
     "FULL_ATTENTION_LAYERS",
@@ -196,6 +223,9 @@ __all__ = [
     "LAYERS",
     "MODEL_ID",
     "MTP_TENSOR_SPECS",
+    "MIXED_OBJECT_SPECS",
+    "MIXED_TENSOR_SPECS",
+    "MIXED_WEIGHTS_ID",
     "OBJECT_SPECS",
     "RESOURCE_SPECS",
     "TARGET_KEY",

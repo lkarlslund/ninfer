@@ -18,6 +18,25 @@
 namespace ninfer::targets::qwen3_8_flash_next_125b_a6b::detail {
 namespace {
 
+constexpr QType projection_qtype(WeightsProfile profile) {
+    return profile == WeightsProfile::Nvfp4 ? QType::BF16_CTRL
+                                            : QType::FP8_E4M3FN_BLOCK128_F32S;
+}
+
+std::size_t projection_workspace(WeightsProfile profile, int n, int k, int first, int last) {
+    return ops::linear_workspace_capacity_bytes(projection_qtype(profile), n, k,
+                                                ops::LinearPolicy::A16Only, first, last);
+}
+
+void project(const Tensor& input, const Weight& weight, Tensor& output, WorkspaceArena& workspace,
+             cudaStream_t stream) {
+    if (weight.qtype == QType::FP8_E4M3FN_BLOCK128_F32S) {
+        ops::linear(input, weight, output, ops::LinearPolicy::A16Only, workspace, stream);
+    } else {
+        ops::linear(input, weight, output, stream);
+    }
+}
+
 std::vector<GraphExecutionProfile> profiles(std::uint32_t capacity) {
     if (capacity == 0) { return {}; }
     std::vector<GraphExecutionProfile> out;
@@ -67,8 +86,8 @@ void Variant::attention_projection(const Tensor& hidden,
                                    qwen3_8_flash_next::TextPhase, WorkspaceArena& workspace,
                                    cudaStream_t stream) {
     ops::flash_next_project_query_gate(hidden, weights.query_gate, query, gate, workspace, stream);
-    ops::linear(hidden, weights.key, key, stream);
-    ops::linear(hidden, weights.value, value, stream);
+    project(hidden, weights.key, key, workspace, stream);
+    project(hidden, weights.value, value, workspace, stream);
 }
 
 void Variant::attention_output_projection(const Tensor& attention, const Weight& weight,
@@ -76,7 +95,7 @@ void Variant::attention_output_projection(const Tensor& attention, const Weight&
                                           WorkspaceArena& workspace, cudaStream_t stream) {
     auto scope   = workspace.scope();
     Tensor delta = workspace.alloc(DType::BF16, {weight.n, attention.ne[1]});
-    ops::linear(attention, weight, delta, stream);
+    project(attention, weight, delta, workspace, stream);
     ops::residual_add(delta, residual, stream);
 }
 
@@ -102,9 +121,9 @@ void Variant::mtp_q_gate_projection(const Tensor& hidden,
 
 void Variant::gdn_input_projection(const Tensor& hidden, const GdnProjectionWeights& weights,
                                    Tensor& qkv, Tensor& output_gate, qwen3_8_flash_next::TextPhase,
-                                   WorkspaceArena&, cudaStream_t stream) {
-    ops::linear(hidden, weights.query_key_value, qkv, stream);
-    ops::linear(hidden, weights.output_gate, output_gate, stream);
+                                   WorkspaceArena& workspace, cudaStream_t stream) {
+    project(hidden, weights.query_key_value, qkv, workspace, stream);
+    project(hidden, weights.output_gate, output_gate, workspace, stream);
 }
 
 void Variant::gdn_input_projection_snapshot(const Tensor&, const GdnProjectionWeights&,
@@ -171,22 +190,29 @@ std::size_t Variant::mtp_q_gate_projection_workspace_capacity_bytes(std::int32_t
     return ops::flash_next_query_gate_workspace_capacity_bytes(last);
 }
 
-std::size_t Variant::attention_projection_workspace_capacity_bytes(WeightsProfile,
+std::size_t Variant::attention_projection_workspace_capacity_bytes(WeightsProfile profile,
                                                                    qwen3_8_flash_next::TextPhase,
-                                                                   std::int32_t,
+                                                                   std::int32_t first,
                                                                    std::int32_t last) {
-    return ops::flash_next_query_gate_workspace_capacity_bytes(last);
+    const auto packed = ops::flash_next_query_gate_workspace_capacity_bytes(last);
+    const auto query = projection_workspace(profile, 12288, 2560, first, last);
+    const auto key = projection_workspace(profile, 512, 2560, first, last);
+    return std::max(packed + query, key);
 }
 
 std::size_t Variant::attention_output_projection_workspace_capacity_bytes(
-    WeightsProfile, qwen3_8_flash_next::TextPhase, std::int32_t, std::int32_t last) {
-    return static_cast<std::size_t>(TextConfig::hidden) * last * sizeof(std::uint16_t);
+    WeightsProfile profile, qwen3_8_flash_next::TextPhase, std::int32_t first,
+    std::int32_t last) {
+    return static_cast<std::size_t>(TextConfig::hidden) * last * sizeof(std::uint16_t) + 256 +
+           projection_workspace(profile, 2560, 6144, first, last);
 }
 
-std::size_t Variant::gdn_input_projection_workspace_capacity_bytes(WeightsProfile,
+std::size_t Variant::gdn_input_projection_workspace_capacity_bytes(WeightsProfile profile,
                                                                    qwen3_8_flash_next::TextPhase,
-                                                                   std::int32_t, std::int32_t) {
-    return 0;
+                                                                   std::int32_t first,
+                                                                   std::int32_t last) {
+    return std::max(projection_workspace(profile, 10240, 2560, first, last),
+                    projection_workspace(profile, 6144, 2560, first, last));
 }
 
 std::size_t Variant::gdn_input_projection_snapshot_workspace_capacity_bytes(

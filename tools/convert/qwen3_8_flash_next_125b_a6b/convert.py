@@ -19,7 +19,7 @@ from typing import Iterable, Iterator, Sequence
 import torch
 
 from tools.artifact.container import ArtifactIdentity, ArtifactWriter
-from tools.artifact.layouts import encode_direct, swizzle_nvfp4_scales
+from tools.artifact.layouts import encode_direct, encode_fp8_block_scaled, swizzle_nvfp4_scales
 from tools.convert.common.safetensors import ShardReader, TensorMetadata
 from tools.convert.common.quantize import pick_device
 from tools.convert.qwen3_6.common import conversion
@@ -30,6 +30,9 @@ from . import draft_head, inventory
 OUTPUT_BASENAME = "qwen3_8_flash_next_125b_a6b_nvfp4.ninfer"
 RECIPE_ID = "qwen3_8_flash_next_125b_a6b_nvfp4-v1"
 SOURCE_REPOSITORY = "RadixArk/Qwen3.8-Flash-Next-NVFP4"
+MIXED_OUTPUT_BASENAME = "qwen3_8_flash_next_125b_a6b_nvfp4_fp8_proj.ninfer"
+MIXED_RECIPE_ID = "qwen3_8_flash_next_125b_a6b_nvfp4_fp8_proj-v1"
+MIXED_SOURCE_REPOSITORY = "lovedheart/Qwen3.8-Flash-Next-NVFP4-FP8"
 
 _PLE_PREFIX = (
     "model.language_model.layers.1.ple.ple_embedding.ngram_embedding."
@@ -72,7 +75,9 @@ def _load_resources(model_dir: Path) -> tuple[conversion.ResourcePayload, ...]:
     return conversion.load_resources(model_dir, inventory.RESOURCE_SPECS)
 
 
-def _direct_source_specs() -> tuple[inventory.TensorSpec, ...]:
+def _direct_source_specs(
+    tensor_specs: Sequence[inventory.TensorSpec] = inventory.TENSOR_SPECS,
+) -> tuple[inventory.TensorSpec, ...]:
     special = {
         _bank_name(layer, role)
         for layer in inventory.LAYERS
@@ -85,7 +90,7 @@ def _direct_source_specs() -> tuple[inventory.TensorSpec, ...]:
     }
     return tuple(
         spec
-        for spec in inventory.TENSOR_SPECS
+        for spec in tensor_specs
         if spec.name not in special
         and spec.name != _PLE_TABLE
         and spec.name not in (_DRAFT_HEAD, _DRAFT_HEAD_IDS)
@@ -93,10 +98,21 @@ def _direct_source_specs() -> tuple[inventory.TensorSpec, ...]:
     )
 
 
-def _expected_source_signatures() -> dict[str, tuple[tuple[int, ...], str]]:
+def _expected_source_signatures(
+    tensor_specs: Sequence[inventory.TensorSpec] = inventory.TENSOR_SPECS,
+) -> dict[str, tuple[tuple[int, ...], str]]:
     expected = {
-        spec.name: (spec.shape, "BF16") for spec in _direct_source_specs()
+        spec.name: (spec.shape, "F8_E4M3" if spec.format == inventory.FP8_BLOCK else "BF16")
+        for spec in _direct_source_specs(tensor_specs)
     }
+    expected.update(
+        {
+            spec.name.removesuffix(".weight") + ".weight_scale_inv":
+                ((spec.shape[0] // 128, spec.shape[1] // 128), "F32")
+            for spec in tensor_specs
+            if spec.format == inventory.FP8_BLOCK
+        }
+    )
     expected.update(
         {name: (source.shape, source.dtype) for name, source in _VISION_SOURCES.items()}
     )
@@ -130,7 +146,7 @@ def _expected_source_signatures() -> dict[str, tuple[tuple[int, ...], str]]:
     return expected
 
 
-def _validate_config(model_dir: Path) -> dict[str, object]:
+def _validate_config(model_dir: Path, *, mixed: bool = False) -> dict[str, object]:
     config = conversion.load_json(model_dir / "config.json")
     text = config.get("text_config")
     vision = config.get("vision_config")
@@ -184,7 +200,7 @@ def _validate_config(model_dir: Path) -> dict[str, object]:
     conversion.check_members(
         "quantization_config",
         quant,
-        {"quant_method": "modelopt", "quant_algo": "NVFP4"},
+        {"quant_method": "modelopt", "quant_algo": "MIXED_PRECISION" if mixed else "NVFP4"},
     )
     return {
         "layers": 48,
@@ -198,8 +214,9 @@ def _validate_config(model_dir: Path) -> dict[str, object]:
 
 def _validate_source(
     reader: ShardReader,
+    tensor_specs: Sequence[inventory.TensorSpec] = inventory.TENSOR_SPECS,
 ) -> tuple[dict[str, TensorMetadata], dict[str, int]]:
-    expected = _expected_source_signatures()
+    expected = _expected_source_signatures(tensor_specs)
     actual_names = frozenset(reader.names)
     expected_names = frozenset(expected)
     unexpected = actual_names - expected_names - _PLE_METADATA
@@ -342,6 +359,9 @@ def _payload(
         tensor = family_recipe.materialize_recipe(_VISION_BY_NAME[spec.name], reader)
         return conversion.encode_tensor_payload(tensor, spec, device)
     tensor = reader.get(spec.name)
+    if spec.format == inventory.FP8_BLOCK:
+        scale_name = spec.name.removesuffix(".weight") + ".weight_scale_inv"
+        return encode_fp8_block_scaled(tensor.view(torch.uint8), reader.get(scale_name), spec.shape)
     expected_shape = (10240, 1, 4) if spec.name in _CONVOLUTION_NAMES else spec.shape
     if tuple(tensor.shape) != expected_shape or tensor.dtype != torch.bfloat16:
         raise ValueError(f"{spec.name}: direct source signature mismatch")
@@ -357,20 +377,27 @@ def convert(
     out_path: str | Path,
     *,
     device: str | torch.device = "cuda",
+    profile: str = "nvfp4",
 ) -> Path:
     source = Path(model_dir)
     output = Path(out_path)
-    if output.name != OUTPUT_BASENAME:
-        raise ValueError(f"output basename must be {OUTPUT_BASENAME!r}")
+    if profile not in ("nvfp4", "nvfp4-fp8-proj"):
+        raise ValueError("profile must be 'nvfp4' or 'nvfp4-fp8-proj'")
+    mixed = profile == "nvfp4-fp8-proj"
+    output_basename = MIXED_OUTPUT_BASENAME if mixed else OUTPUT_BASENAME
+    if output.name != output_basename:
+        raise ValueError(f"output basename must be {output_basename!r}")
+    object_specs = inventory.MIXED_OBJECT_SPECS if mixed else inventory.OBJECT_SPECS
+    tensor_specs = inventory.MIXED_TENSOR_SPECS if mixed else inventory.TENSOR_SPECS
     started = time.perf_counter()
     resolved_device = pick_device(device)
-    config_summary = _validate_config(source)
+    config_summary = _validate_config(source, mixed=mixed)
     resources = _load_resources(source)
     resource_map = {item.name: item.data for item in resources}
-    object_plan = conversion.build_object_plan(inventory.OBJECT_SPECS, resource_map)
+    object_plan = conversion.build_object_plan(object_specs, resource_map)
 
     with ShardReader(source) as reader:
-        _, dtype_counts = _validate_source(reader)
+        _, dtype_counts = _validate_source(reader, tensor_specs)
         draft = draft_head.compute_shortlist(
             Path(__file__).resolve().parents[3] / draft_head.DEFAULT_RANKING,
             source,
@@ -380,24 +407,27 @@ def convert(
         output.parent.mkdir(parents=True, exist_ok=True)
         with ArtifactWriter(
             output,
-            ArtifactIdentity(inventory.MODEL_ID, inventory.WEIGHTS_ID),
+            ArtifactIdentity(inventory.MODEL_ID,
+                             inventory.MIXED_WEIGHTS_ID if mixed else inventory.WEIGHTS_ID),
             object_plan.specs,
         ) as writer:
-            for index, spec in enumerate(inventory.OBJECT_SPECS, start=1):
+            for index, spec in enumerate(object_specs, start=1):
                 payload = (
                     resource_map[spec.name]
                     if isinstance(spec, inventory.ResourceSpec)
                     else _payload(spec, reader, resolved_device, draft)
                 )
                 writer.write(spec.name, payload)
-                print(f"[{index}/{len(inventory.OBJECT_SPECS)}] {spec.name}", flush=True)
+                print(f"[{index}/{len(object_specs)}] {spec.name}", flush=True)
 
     elapsed = time.perf_counter() - started
     report = {
-        "identity": {"model_id": inventory.MODEL_ID, "weights_id": inventory.WEIGHTS_ID},
+        "identity": {"model_id": inventory.MODEL_ID,
+                     "weights_id": inventory.MIXED_WEIGHTS_ID if mixed else inventory.WEIGHTS_ID},
         "target_key": inventory.TARGET_KEY,
-        "recipe_id": RECIPE_ID,
-        "source": {"repository": SOURCE_REPOSITORY, "path": str(source.resolve())},
+        "recipe_id": MIXED_RECIPE_ID if mixed else RECIPE_ID,
+        "source": {"repository": MIXED_SOURCE_REPOSITORY if mixed else SOURCE_REPOSITORY,
+                   "path": str(source.resolve())},
         "output": str(output.resolve()),
         "config_summary": config_summary,
         "source_dtype_counts": dtype_counts,
@@ -419,8 +449,9 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--model", required=True, type=Path)
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--device", default="cuda")
+    parser.add_argument("--profile", choices=("nvfp4", "nvfp4-fp8-proj"), default="nvfp4")
     args = parser.parse_args(argv)
-    convert(args.model, args.out, device=args.device)
+    convert(args.model, args.out, device=args.device, profile=args.profile)
 
 
 if __name__ == "__main__":

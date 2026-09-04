@@ -53,15 +53,17 @@ Package::WeightsProfile Package::resolve_weights(const artifact::ArtifactIdentit
     if (identity.model_id == model_id && identity.weights_id == kWeightsId) {
         return WeightsProfile::Nvfp4;
     }
+    if (identity.model_id == model_id && identity.weights_id == kMixedWeightsId) {
+        return WeightsProfile::Nvfp4Fp8Projections;
+    }
     throw std::runtime_error("artifact identity '" + identity.model_id + "/" + identity.weights_id +
                              "' is not supported by target '" + std::string(target_key) + "'");
 }
 
 Package::LoadPlan Package::plan_load(artifact::Binder& binder, const EngineOptions& options,
                                      WeightsProfile profile) {
-    if (profile != WeightsProfile::Nvfp4) { throw std::logic_error("invalid Flash-Next profile"); }
     return LoadPlan(std::make_unique<LoadPlan::Impl>(
-        profile, plan_artifact(binder, qwen3_8_flash_next::startup_features(options))));
+        profile, plan_artifact(binder, qwen3_8_flash_next::startup_features(options), profile)));
 }
 
 std::unique_ptr<Package::LoadedModel>

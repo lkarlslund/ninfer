@@ -106,6 +106,7 @@ void test_registered_sizes() {
     constexpr StorageLayout rows     = StorageLayout::RowSplitK128V1;
     constexpr StorageLayout experts  = StorageLayout::ExpertBlockScaleK16M128x4V1;
     constexpr StorageLayout fp8_rows = StorageLayout::RowScaleV1;
+    constexpr StorageLayout fp8_blocks = StorageLayout::BlockScaleK128M128V1;
 
     const std::array<std::uint64_t, 2> shape_2x3 = {2, 3};
     const std::array<std::uint64_t, 1> shape_2   = {2};
@@ -115,6 +116,7 @@ void test_registered_sizes() {
     const std::array<std::uint64_t, 2> w8_shape  = {1, 33};
     const std::array<std::uint64_t, 2> fp8_shape = {2, 4};
     const std::array<std::uint64_t, 3> expert_shape = {2, 128, 64};
+    const std::array<std::uint64_t, 2> fp8_block_shape = {128, 256};
 
     if (tensor_encoded_size(direct, NumericFormat::BF16, shape_2x3) != 12 ||
         tensor_encoded_size(direct, NumericFormat::FP32, {}) != 4 ||
@@ -125,6 +127,8 @@ void test_registered_sizes() {
         tensor_encoded_size(rows, NumericFormat::Q6G64_F16S, q6_shape) != 516 ||
         tensor_encoded_size(rows, NumericFormat::W8G32_F16S, w8_shape) != 264 ||
         tensor_encoded_size(fp8_rows, NumericFormat::FP8_E4M3FN_ROW_BF16S, fp8_shape) != 260 ||
+        tensor_encoded_size(fp8_blocks, NumericFormat::FP8_E4M3FN_BLOCK128_F32S,
+                            fp8_block_shape) != 32776 ||
         tensor_encoded_size(experts, NumericFormat::NVFP4, expert_shape) != 9224) {
         throw std::runtime_error("registered encoded-size calculation is wrong");
     }
@@ -133,6 +137,10 @@ void test_registered_sizes() {
     expect_artifact_error(
         [&] { tensor_encoded_size(fp8_rows, NumericFormat::FP8_E4M3FN_ROW_BF16S, shape_2); },
         "row-scale rank mismatch");
+    expect_artifact_error(
+        [&] { tensor_encoded_size(fp8_blocks, NumericFormat::FP8_E4M3FN_BLOCK128_F32S,
+                                  fp8_shape); },
+        "block-scale geometry mismatch");
 }
 
 void test_normative_fixture() {

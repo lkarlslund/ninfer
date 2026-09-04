@@ -40,7 +40,9 @@ struct FlashNextQsaWeights {
 };
 
 [[nodiscard]] std::size_t flash_next_qsa_workspace_capacity_bytes(std::int32_t tokens,
-                                                                  std::uint32_t max_context);
+                                                                  std::uint32_t max_context,
+                                                                  QType projection_qtype =
+                                                                      QType::BF16_CTRL);
 
 // The checkpoint stores Q and its sigmoid gate interleaved per head as
 // 24 repetitions of [query(256), gate(256)]. Project and unpack that physical

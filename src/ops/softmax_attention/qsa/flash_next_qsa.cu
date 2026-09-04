@@ -1458,6 +1458,23 @@ void require_weight(const Weight& weight, int n, int k, const char* label) {
     }
 }
 
+void require_projection(const Weight& weight, int n, int k, const char* label) {
+    if (weight.qdata == nullptr || weight.n != n || weight.k != k ||
+        (weight.qtype != QType::BF16_CTRL &&
+         weight.qtype != QType::FP8_E4M3FN_BLOCK128_F32S)) {
+        throw std::invalid_argument(label);
+    }
+}
+
+void project(const Tensor& input, const Weight& weight, Tensor& output, WorkspaceArena& workspace,
+             cudaStream_t stream, Bf16GemmContext* bf16_gemm) {
+    if (weight.qtype == QType::FP8_E4M3FN_BLOCK128_F32S) {
+        linear(input, weight, output, LinearPolicy::A16Only, workspace, stream);
+    } else {
+        linear(input, weight, output, stream, bf16_gemm);
+    }
+}
+
 } // namespace
 
 void flash_next_expand_text_positions(const Tensor& positions, Tensor& mrope_positions,
@@ -1478,7 +1495,8 @@ void flash_next_expand_text_positions(const Tensor& positions, Tensor& mrope_pos
 }
 
 std::size_t flash_next_qsa_workspace_capacity_bytes(std::int32_t tokens,
-                                                     std::uint32_t max_context) {
+                                                     std::uint32_t max_context,
+                                                     QType projection_qtype) {
     if (tokens <= 0 || max_context == 0) {
         throw std::invalid_argument("Flash-Next QSA dimensions must be positive");
     }
@@ -1498,7 +1516,9 @@ std::size_t flash_next_qsa_workspace_capacity_bytes(std::int32_t tokens,
         ? static_cast<std::uint64_t>(tokens) * kMaxDecodeAttentionSplits * kQueryHeads *
               (kHeadDim + 2) * sizeof(float)
         : 0;
-    const std::uint64_t total = bf16 + indices + selection + split_partials + 16 * 256;
+    const std::uint64_t projection = linear_workspace_capacity_bytes(
+        projection_qtype, 12288, 2560, LinearPolicy::A16Only, 1, tokens);
+    const std::uint64_t total = bf16 + indices + selection + split_partials + projection + 16 * 256;
     if (total > std::numeric_limits<std::size_t>::max()) {
         throw std::overflow_error("Flash-Next QSA workspace size overflow");
     }
@@ -1524,15 +1544,19 @@ void flash_next_project_query_gate(const Tensor& input, const Weight& query_gate
         gate.dtype != DType::BF16 || !gate.is_contiguous() || gate.numel() != query.numel()) {
         throw std::invalid_argument("flash_next_project_query_gate: invalid tensor geometry");
     }
-    require_weight(query_gate, 12288, 2560,
+    require_projection(query_gate, 12288, 2560,
                    "flash_next_project_query_gate: invalid packed weight");
-    if (tokens == 1) {
+    if (tokens == 1 && query_gate.qtype == QType::BF16_CTRL) {
         detail::launch_bf16_query_gate_decode(input, query_gate, query, gate, stream);
         return;
     }
     auto scope = workspace.scope();
     Tensor packed = workspace.alloc(DType::BF16, {12288, tokens});
-    linear(input, query_gate, packed, stream, bf16_gemm);
+    if (query_gate.qtype == QType::FP8_E4M3FN_BLOCK128_F32S) {
+        linear(input, query_gate, packed, LinearPolicy::A16Only, workspace, stream);
+    } else {
+        linear(input, query_gate, packed, stream, bf16_gemm);
+    }
     const int blocks = static_cast<int>(std::min<std::int64_t>(
         4096, (query.numel() + 255) / 256));
     split_query_gate_kernel<<<blocks, 256, 0, stream>>>(
@@ -1605,11 +1629,11 @@ void flash_next_qsa(const Tensor& input, const Tensor& cache_positions,
         cache.auxiliary_pages[1].ne[0] != 3) {
         throw std::invalid_argument("flash_next_qsa: invalid auxiliary cache geometry");
     }
-    require_weight(weights.query_gate, 12288, 2560,
+    require_projection(weights.query_gate, 12288, 2560,
                    "flash_next_qsa: invalid packed query/gate weight");
-    require_weight(weights.key, 512, 2560, "flash_next_qsa: invalid key weight");
-    require_weight(weights.value, 512, 2560, "flash_next_qsa: invalid value weight");
-    require_weight(weights.output, 2560, 6144, "flash_next_qsa: invalid output weight");
+    require_projection(weights.key, 512, 2560, "flash_next_qsa: invalid key weight");
+    require_projection(weights.value, 512, 2560, "flash_next_qsa: invalid value weight");
+    require_projection(weights.output, 2560, 6144, "flash_next_qsa: invalid output weight");
     require_weight(weights.index_query, 512, 2560, "flash_next_qsa: invalid index query weight");
     require_weight(weights.index_key, 128, 2560, "flash_next_qsa: invalid index key weight");
     auto scope = workspace.scope();
@@ -1619,8 +1643,8 @@ void flash_next_qsa(const Tensor& input, const Tensor& cache_positions,
     Tensor value = workspace.alloc(DType::BF16, {512, tokens});
     flash_next_project_query_gate(input, weights.query_gate, query, gate, workspace, stream,
                                   bf16_gemm);
-    linear(input, weights.key, key, stream, bf16_gemm);
-    linear(input, weights.value, value, stream, bf16_gemm);
+    project(input, weights.key, key, workspace, stream, bf16_gemm);
+    project(input, weights.value, value, workspace, stream, bf16_gemm);
     Tensor normalized_query = workspace.alloc(DType::BF16, {6144, tokens});
     Tensor normalized_key = workspace.alloc(DType::BF16, {512, tokens});
     Tensor query_heads = query.view({kHeadDim, kQueryHeads, tokens});
@@ -1943,7 +1967,7 @@ void flash_next_qsa(const Tensor& input, const Tensor& cache_positions,
     Tensor attention_heads = attention.view({kHeadDim, kQueryHeads, tokens});
     Tensor gate_heads = gate.view({kHeadDim, kQueryHeads, tokens});
     sigmoid_mul(gate_heads, attention_heads, stream);
-    linear(attention, weights.output, destination, stream, bf16_gemm);
+    project(attention, weights.output, destination, workspace, stream, bf16_gemm);
     CUDA_CHECK(cudaGetLastError());
 }
 

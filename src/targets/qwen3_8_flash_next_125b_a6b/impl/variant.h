@@ -38,6 +38,11 @@ struct Variant {
     static constexpr std::int32_t draft_head_rows              = 147456;
     static constexpr std::int32_t draft_head_valid_rows        = 147456;
 
+    static constexpr QType main_projection_qtype(WeightsProfile profile) {
+        return profile == WeightsProfile::Nvfp4 ? QType::BF16_CTRL
+                                                : QType::FP8_E4M3FN_BLOCK128_F32S;
+    }
+
     static void attention_projection(const Tensor&, const FullAttentionProjectionWeights&, Tensor&,
                                      Tensor&, Tensor&, Tensor&, qwen3_8_flash_next::TextPhase,
                                      WorkspaceArena&, cudaStream_t);

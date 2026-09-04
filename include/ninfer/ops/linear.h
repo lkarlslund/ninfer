@@ -75,8 +75,9 @@ enum class LinearPolicy : std::uint8_t {
  *
  * @par Supported execution domain
  * Registered execution uses RowSplit Q4G64_F16S, Q5G64_F16S, Q6G64_F16S, or W8G32_F16S weights
- * with FP16 scales, block-scaled NVFP4 weights, row-scaled FP8_E4M3FN_ROW_BF16S weights, plus
- * registered contiguous BF16_CTRL problems. Qwen3.8 Flash-Next adds its exact BF16 projection
+ * with FP16 scales, block-scaled NVFP4 weights, row-scaled FP8_E4M3FN_ROW_BF16S weights,
+ * 128-by-128 block-scaled FP8_E4M3FN_BLOCK128_F32S weights, plus registered contiguous
+ * BF16_CTRL problems. Qwen3.8 Flash-Next adds its exact projection
  * geometries, including hyperconnection, attention/GDN, shared-expert, output-head, and Vision
  * matrices. Each format owns a finite registry of exact physical
  * weight problems and selects its kernel internally; a valid encoding and alignment do not imply
@@ -85,7 +86,9 @@ enum class LinearPolicy : std::uint8_t {
  * problems register the five non-vocabulary FP8 geometries and accept every positive T. Text and
  * MTP packed-weight problems accept every positive column extent T. Registered Vision problems
  * accept raw-patch P in `{4,8,...,131072}` or merged-token V in `[1,32768]`; a matrix column does
- * not inherently represent a text token. FP32_CTRL is unsupported.
+ * not inherently represent a text token. Block-scaled FP8 registers `[N,K]` in
+ * `{[12288,2560], [512,2560], [10240,2560], [6144,2560], [2560,6144]}` at every positive T.
+ * FP32_CTRL is unsupported.
  *
  * @par Numerical contract
  * Test fixture code materializes the persistent weight as its logical FP32 dequantized matrix.
@@ -108,12 +111,14 @@ enum class LinearPolicy : std::uint8_t {
  * T>=25 to A8. FP8 `[248320,5120]` admits A16Only, AllowA8, and AllowA4; every policy retains A16
  * compute at every positive T. NVFP4 admits A16Only and AllowA4; AllowA4 permits the private
  * resolver to select either a qualified A16 route or activation quantization to NVFP4 at every
- * positive T. The selected route depends only on the registered problem and T.
+ * positive T. Block-scaled FP8 admits only A16Only. The selected route depends only on the
+ * registered problem and T.
  *
  * @par Workspace
  * `workspace` is caller-owned call-scoped transient storage sized by
  * linear_workspace_capacity_bytes(). It must not overlap x, any weight plane, or out. Linear does
- * not allocate device memory internally.
+ * not allocate device memory internally. Block-scaled FP8 needs no workspace for T<=8; at larger T
+ * it stages one BF16 `[N,K]` matrix in the arena before using the registered large-T BF16 route.
  *
  * @param[in] x Contiguous, non-null, 16-byte-aligned BF16 input matrix `[K,T]`.
  * @param[in] w Logical weight matrix `[N,K]` in a registered persistent format and layout.
@@ -129,8 +134,9 @@ void linear(const Tensor& x, const Weight& w, Tensor& out, LinearPolicy policy,
 /**
  * @brief Applies the A16-only form of the bias-free matrix projection.
  *
- * @details This overload admits only A16 compute and requires no transient workspace. All tensor,
- * weight, aliasing, and execution-domain requirements of the policy-bearing overload apply.
+ * @details This overload admits only A16 compute and requires no transient workspace. It therefore
+ * does not admit block-scaled FP8 at T>8. All tensor, weight, aliasing, and execution-domain
+ * requirements of the policy-bearing overload apply.
  *
  * @param[in] x Contiguous BF16 input matrix `[K,T]`.
  * @param[in] w Logical weight matrix `[N,K]` in a registered persistent format and layout.

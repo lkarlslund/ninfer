@@ -1,0 +1,13 @@
+#pragma once
+
+#include "core/tensor.h"
+
+#include <cuda_runtime.h>
+
+namespace ninfer::ops::detail {
+
+void launch_fp8_block_small_t(const Tensor& x, const Weight& weight, Tensor& out,
+                              cudaStream_t stream);
+void launch_fp8_block_dequantize(const Weight& weight, void* bf16_weight, cudaStream_t stream);
+
+} // namespace ninfer::ops::detail

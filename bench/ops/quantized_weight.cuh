@@ -82,6 +82,12 @@ static __global__ void fill_f16_kernel(std::uint16_t* values, std::uint64_t coun
     for (std::uint64_t index = begin; index < count; index += stride) { values[index] = bits; }
 }
 
+static __global__ void fill_f32_kernel(float* values, std::uint64_t count, float value) {
+    const std::uint64_t begin = static_cast<std::uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    const std::uint64_t stride = static_cast<std::uint64_t>(gridDim.x) * blockDim.x;
+    for (std::uint64_t index = begin; index < count; index += stride) { values[index] = value; }
+}
+
 inline int launch_grid(std::uint64_t elements) {
     return static_cast<int>(
         std::min<std::uint64_t>(65535, std::max<std::uint64_t>(1, (elements + 255) / 256)));
@@ -276,6 +282,44 @@ inline PackedQuantizedWeight make_fp8_weight(std::int32_t n, std::int32_t k) {
     weight.scale_nb[1]      = static_cast<std::int64_t>(n) * 2;
     weight.scale_nb[2]      = weight.scale_nb[1];
     weight.scale_nb[3]      = weight.scale_nb[1];
+    return result;
+}
+
+inline PackedQuantizedWeight make_fp8_block_weight(std::int32_t n, std::int32_t k) {
+    if (n <= 0 || k <= 0 || n % 128 || k % 128) {
+        throw std::invalid_argument("invalid benchmark block FP8 weight shape");
+    }
+    const std::uint64_t code_bytes = detail::checked_mul(n, k, "benchmark block FP8 code size");
+    const std::uint64_t scale_offset = detail::align_up(code_bytes, 256);
+    const std::uint64_t scale_count = static_cast<std::uint64_t>(n / 128) * (k / 128);
+    const std::uint64_t scale_bytes = scale_count * sizeof(float);
+    const std::uint64_t payload_bytes = scale_offset + scale_bytes;
+    PackedQuantizedWeight result{DeviceBuffer(payload_bytes), {}, code_bytes, 0, 0,
+                                 scale_offset, scale_bytes};
+    CUDA_CHECK(cudaMemset(result.storage.p, 0x31, code_bytes));
+    detail::fill_f32_kernel<<<detail::launch_grid(scale_count), 256>>>(
+        reinterpret_cast<float*>(static_cast<std::uint8_t*>(result.storage.p) + scale_offset),
+        scale_count, 0.125F);
+    CUDA_CHECK(cudaGetLastError());
+    CUDA_CHECK(cudaDeviceSynchronize());
+    Weight& weight = result.weight;
+    weight.payload = result.storage.p;
+    weight.payload_bytes = payload_bytes;
+    weight.qtype = QType::FP8_E4M3FN_BLOCK128_F32S;
+    weight.layout = QuantLayout::BlockScaleK128M128;
+    weight.scale_dtype = DType::FP32;
+    weight.group_size = weight.group = 128;
+    weight.ndim = 2;
+    weight.n = weight.shape[0] = weight.padded_shape[0] = n;
+    weight.k = weight.shape[1] = weight.padded_shape[1] = k;
+    weight.qdata = result.storage.p;
+    weight.scales = static_cast<std::uint8_t*>(result.storage.p) + scale_offset;
+    weight.scale_ne[0] = k / 128;
+    weight.scale_ne[1] = n / 128;
+    weight.scale_nb[0] = 4;
+    weight.scale_nb[1] = static_cast<std::int64_t>(k / 128) * 4;
+    weight.scale_nb[2] = weight.scale_nb[1] * (n / 128);
+    weight.scale_nb[3] = weight.scale_nb[2];
     return result;
 }
 

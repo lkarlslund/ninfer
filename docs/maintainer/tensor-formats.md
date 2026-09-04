@@ -1,13 +1,13 @@
 # NInfer Persistent Tensor Numeric Formats
 
-This reference defines the nine persistent numeric tensor formats accepted by current `.ninfer`
+This reference defines the ten persistent numeric tensor formats accepted by current `.ninfer`
 artifacts: their logical words, quantization semantics, canonical reference encoders where
 applicable, and conformance boundaries. Container framing, physical byte layouts, checkpoint
 assignment, kernels, and runtime-state codecs are defined separately.
 
 ## 1. Registered formats
 
-NInfer has exactly nine persistent numeric tensor formats in four categories.
+NInfer has exactly ten persistent numeric tensor formats in four categories.
 
 Direct scalar formats preserve one logical scalar word per tensor element:
 
@@ -37,6 +37,12 @@ The row-scaled floating-point weight format is:
 | Canonical name | Code | Scale granularity | Scale |
 |---|---|---|---|
 | `FP8_E4M3FN_ROW_BF16S` | E4M3FN, 8 bits/weight | one multiplier per logical row | BF16 |
+
+The 128-by-128 block-scaled floating-point weight format is:
+
+| Canonical name | Code | Scale granularity | Scale |
+|---|---|---|---|
+| `FP8_E4M3FN_BLOCK128_F32S` | E4M3FN, 8 bits/weight | one multiplier per 128 output rows and 128 K columns | FP32 |
 
 This is a closed registry, not a template from which arbitrary scalar types, bit widths, and group
 sizes may be constructed. In particular, `FP16`, bare `FP8_E4M3FN`, `I64`, `Q4G32_F16S`,
@@ -121,6 +127,11 @@ A checkpoint recipe may copy valid E4M3FN code words and BF16 row multipliers fr
 or name a separate source-to-format encoder. Scale selection and FP8 rounding belong to that recipe
 or encoder profile and do not change the represented values defined in Section 3.4.
 
+`FP8_E4M3FN_BLOCK128_F32S` has the corresponding exact decode contract: for logical matrix
+coordinate `[n,k]`, decode the finite E4M3FN code and multiply it by the positive finite FP32 scale
+at `[n/128,k/128]`. Its registered Flash-Next recipe copies both source word planes exactly and
+owns the upstream quantization provenance.
+
 Direct formats also separate representation from conversion. For example, the `BF16` format does
 not decide whether an FP32 source is rounded, truncated, or rejected. Any conversion from a source
 type to a different direct format belongs to the checkpoint recipe.
@@ -153,8 +164,9 @@ One format may have more than one deliberately supported layout, but every layou
 exactly the same direct words or logical codes and scales. The currently registered layouts are
 `contiguous-le-v1` for direct words, `row-split-k128-v1` for grouped signed-integer formats, and
 `blockscale-k16-m128x4-v1` for `NVFP4`, and `row-scale-v1` for
-`FP8_E4M3FN_ROW_BF16S`. Their byte order, plane packing, padding, swizzle, divisor placement, and
-alignment rules belong to the layout registry, not to these nine numeric formats.
+`FP8_E4M3FN_ROW_BF16S`, and `blockscale-k128-m128-v1` for
+`FP8_E4M3FN_BLOCK128_F32S`. Their byte order, plane packing, padding, swizzle, divisor placement,
+and alignment rules belong to the layout registry, not to these ten numeric formats.
 
 ### 2.7 Compute profile and kernel support
 

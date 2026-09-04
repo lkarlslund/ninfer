@@ -25,7 +25,7 @@ struct Package;
 
 namespace detail {
 struct Variant;
-enum class WeightsProfile : std::uint8_t { Nvfp4 };
+enum class WeightsProfile : std::uint8_t { Nvfp4, Nvfp4Fp8Projections };
 using Frontend        = qwen3_8_flash_next::Frontend;
 using PreparedPrompt  = qwen3_8_flash_next::PreparedPrompt;
 using OutputSession   = qwen3_8_flash_next::OutputSession;

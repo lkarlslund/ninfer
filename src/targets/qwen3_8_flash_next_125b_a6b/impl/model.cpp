@@ -22,6 +22,11 @@ Weight bf16(const artifact::MaterializedArtifact& artifact, artifact::ObjectHand
                                          columns);
 }
 
+Weight projection(const artifact::MaterializedArtifact& artifact, artifact::ObjectHandle handle,
+                  artifact::NumericFormat format, int rows, int columns) {
+    return artifact::materialized_weight(artifact, handle, format, rows, columns);
+}
+
 Weight row_view(const Weight& parent, int begin, int rows) {
     if (parent.qtype != QType::BF16_CTRL || parent.layout != QuantLayout::Contiguous || begin < 0 ||
         rows <= 0 || begin + rows > parent.n) {
@@ -54,14 +59,15 @@ FinalHyperConnectionWeights final_hc(const FinalHyperConnectionPlan& plan,
 }
 
 ops::FlashNextQsaWeights attention(const FullAttentionPlan& plan,
-                                   const artifact::MaterializedArtifact& artifact) {
-    const Weight query_gate = bf16(artifact, plan.query_gate, 12288, 2560);
+                                   const artifact::MaterializedArtifact& artifact,
+                                   artifact::NumericFormat format) {
+    const Weight query_gate = projection(artifact, plan.query_gate, format, 12288, 2560);
     const Weight index      = bf16(artifact, plan.index_query_key, 640, 2560);
     return {
         .query_gate       = query_gate,
-        .key              = bf16(artifact, plan.key, 512, 2560),
-        .value            = bf16(artifact, plan.value, 512, 2560),
-        .output           = bf16(artifact, plan.output, 2560, 6144),
+        .key              = projection(artifact, plan.key, format, 512, 2560),
+        .value            = projection(artifact, plan.value, format, 512, 2560),
+        .output           = projection(artifact, plan.output, format, 2560, 6144),
         .query_norm       = tensor(artifact, plan.query_norm, {256}),
         .key_norm         = tensor(artifact, plan.key_norm, {256}),
         .index_query      = row_view(index, 0, 512),
@@ -71,17 +77,18 @@ ops::FlashNextQsaWeights attention(const FullAttentionPlan& plan,
     };
 }
 
-GdnWeights gdn(const GdnPlan& plan, const artifact::MaterializedArtifact& artifact) {
+GdnWeights gdn(const GdnPlan& plan, const artifact::MaterializedArtifact& artifact,
+               artifact::NumericFormat format) {
     return {
         .a_log           = tensor(artifact, plan.a_log, {48}, artifact::NumericFormat::FP32),
         .dt_bias         = tensor(artifact, plan.dt_bias, {48}, artifact::NumericFormat::FP32),
         .convolution     = tensor(artifact, plan.convolution, {10240, 4}),
         .a_projection    = bf16(artifact, plan.a_projection, 48, 2560),
         .b_projection    = bf16(artifact, plan.b_projection, 48, 2560),
-        .query_key_value = bf16(artifact, plan.query_key_value, 10240, 2560),
-        .output_gate     = bf16(artifact, plan.output_gate, 6144, 2560),
+        .query_key_value = projection(artifact, plan.query_key_value, format, 10240, 2560),
+        .output_gate     = projection(artifact, plan.output_gate, format, 6144, 2560),
         .norm            = tensor(artifact, plan.norm, {128}),
-        .output          = bf16(artifact, plan.output, 2560, 6144),
+        .output          = projection(artifact, plan.output, format, 2560, 6144),
     };
 }
 
@@ -214,7 +221,7 @@ LoadedModelData::LoadedModelData(BindingPlan plan, artifact::MaterializedArtifac
         if (source.is_full_attention) {
             FullLayerWeights& out = runtime.full_layers.at(full_index++);
             out.attention_hc      = hc(source.attention_hc, backing);
-            out.projection        = attention(source.attention, backing);
+            out.projection        = attention(source.attention, backing, plan.projection_format);
             out.query_norm        = out.projection.query_norm;
             out.key_norm          = out.projection.key_norm;
             out.output            = out.projection.output;
@@ -225,7 +232,7 @@ LoadedModelData::LoadedModelData(BindingPlan plan, artifact::MaterializedArtifac
         } else {
             GdnLayerWeights& out = runtime.gdn_layers.at(gdn_index++);
             out.attention_hc     = hc(source.attention_hc, backing);
-            out.projection       = gdn(source.gdn, backing);
+            out.projection       = gdn(source.gdn, backing, plan.projection_format);
             out.convolution      = out.projection.convolution;
             out.norm             = out.projection.norm;
             out.output           = out.projection.output;
@@ -254,7 +261,8 @@ LoadedModelData::LoadedModelData(BindingPlan plan, artifact::MaterializedArtifac
             .hidden_projection    = bf16(backing, source.hidden_projection, 2560, 2560),
             .input_norm           = tensor(backing, source.attention_hc.norm, {10240}),
             .attention_hc         = hc(source.attention_hc, backing),
-            .attention            = attention(source.attention, backing),
+            .attention            = attention(source.attention, backing,
+                                              artifact::NumericFormat::BF16),
             .query_norm           = tensor(backing, source.attention.query_norm, {256}),
             .key_norm             = tensor(backing, source.attention.key_norm, {256}),
             .output               = bf16(backing, source.attention.output, 2560, 6144),

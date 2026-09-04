@@ -43,7 +43,15 @@ class Fp8RowFormat:
     name: str
 
 
-NumericFormat: TypeAlias = DirectFormat | QuantFormat | Nvfp4Format | Fp8RowFormat
+@dataclass(frozen=True, slots=True)
+class Fp8BlockFormat:
+    """E4M3FN weights with one FP32 multiplier per 128x128 block."""
+
+    name: str
+    block_size: int
+
+
+NumericFormat: TypeAlias = DirectFormat | QuantFormat | Nvfp4Format | Fp8RowFormat | Fp8BlockFormat
 
 
 BF16 = DirectFormat("BF16", 2)
@@ -57,6 +65,7 @@ Q6G64_F16S = QuantFormat("Q6G64_F16S", 6, 64, -32, 31)
 W8G32_F16S = QuantFormat("W8G32_F16S", 8, 32, -127, 127)
 NVFP4 = Nvfp4Format("NVFP4", 16)
 FP8_E4M3FN_ROW_BF16S = Fp8RowFormat("FP8_E4M3FN_ROW_BF16S")
+FP8_E4M3FN_BLOCK128_F32S = Fp8BlockFormat("FP8_E4M3FN_BLOCK128_F32S", 128)
 
 
 DIRECT_FORMATS = MappingProxyType(
@@ -72,8 +81,11 @@ NVFP4_FORMATS = MappingProxyType({NVFP4.name: NVFP4})
 FP8_ROW_FORMATS = MappingProxyType(
     {FP8_E4M3FN_ROW_BF16S.name: FP8_E4M3FN_ROW_BF16S}
 )
+FP8_BLOCK_FORMATS = MappingProxyType(
+    {FP8_E4M3FN_BLOCK128_F32S.name: FP8_E4M3FN_BLOCK128_F32S}
+)
 NUMERIC_FORMATS = MappingProxyType(
-    {**DIRECT_FORMATS, **QUANT_FORMATS, **NVFP4_FORMATS, **FP8_ROW_FORMATS}
+    {**DIRECT_FORMATS, **QUANT_FORMATS, **NVFP4_FORMATS, **FP8_ROW_FORMATS, **FP8_BLOCK_FORMATS}
 )
 
 
@@ -155,10 +167,13 @@ __all__ = [
     "DIRECT_FORMATS",
     "DirectFormat",
     "FP8_E4M3FN_ROW_BF16S",
+    "FP8_E4M3FN_BLOCK128_F32S",
+    "FP8_BLOCK_FORMATS",
     "FP8_E4M3FN",
     "FP8_ROW_FORMATS",
     "FP32",
     "Fp8RowFormat",
+    "Fp8BlockFormat",
     "I32",
     "NUMERIC_FORMATS",
     "NVFP4",

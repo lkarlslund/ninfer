@@ -18,11 +18,12 @@
 
 namespace ninfer::ops::detail {
 
-template <class Geometry, int ActiveTokens, class Schedule, class Output = Fp8ContiguousOutput>
+template <class Geometry, int ActiveTokens, class Schedule, class Output = Fp8ContiguousOutput,
+          bool BlockScaled = false>
 __global__
 __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void fp8_a16_small_t_mma_kernel(
     const __nv_bfloat16* __restrict__ x, const std::uint8_t* __restrict__ weight_codes,
-    const __nv_bfloat16* __restrict__ row_scales, Output output) {
+    const void* __restrict__ scale_data, Output output) {
     constexpr int kHidden     = Geometry::kInputRows;
     constexpr int kTileK      = Schedule::kTileKPerWarp;
     constexpr int kWarps      = Schedule::kKWarps;
@@ -122,10 +123,27 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void fp8_a16_sm
                 return static_cast<unsigned>(
                     *reinterpret_cast<const std::uint16_t*>(&code_shared[row][offset]));
             };
-            const unsigned a0 = fp8_e4m3x2_to_bf16x2_bits(load_code_pair(gid, code_col));
-            const unsigned a1 = fp8_e4m3x2_to_bf16x2_bits(load_code_pair(gid + 8, code_col));
-            const unsigned a2 = fp8_e4m3x2_to_bf16x2_bits(load_code_pair(gid, code_col + 8));
-            const unsigned a3 = fp8_e4m3x2_to_bf16x2_bits(load_code_pair(gid + 8, code_col + 8));
+            const auto widen = [&](int row, int col) {
+                const unsigned packed = load_code_pair(row, col);
+                if constexpr (!BlockScaled) {
+                    return fp8_e4m3x2_to_bf16x2_bits(packed);
+                } else {
+                    __nv_fp8x2_e4m3 fp8;
+                    fp8.__x = static_cast<std::uint16_t>(packed);
+                    const float2 decoded = static_cast<float2>(fp8);
+                    const int global_col = group_index * kGroupK + warp_k0 + col;
+                    const auto* block_scales = static_cast<const float*>(scale_data);
+                    const float scale = block_scales[
+                        ((row0 + row) / 128) * (kHidden / 128) + global_col / 128];
+                    Fp8A16PairBits result;
+                    result.pair = __floats2bfloat162_rn(decoded.x * scale, decoded.y * scale);
+                    return result.bits;
+                }
+            };
+            const unsigned a0 = widen(gid, code_col);
+            const unsigned a1 = widen(gid + 8, code_col);
+            const unsigned a2 = widen(gid, code_col + 8);
+            const unsigned a3 = widen(gid + 8, code_col + 8);
 #pragma unroll
             for (int token_mma = 0; token_mma < kTokenMmas; ++token_mma) {
                 unsigned b0;
@@ -183,17 +201,21 @@ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void fp8_a16_sm
     __syncthreads();
 
     if (warp == 0) {
-        unsigned lane_scale = 0;
-        if (lid < 2) {
-            lane_scale = static_cast<unsigned>(
-                reinterpret_cast<const std::uint16_t*>(row_scales)[row0 + gid + lid * 8]);
+        float top_scale = 1.0F;
+        float bottom_scale = 1.0F;
+        if constexpr (!BlockScaled) {
+            unsigned lane_scale = 0;
+            if (lid < 2) {
+                lane_scale = static_cast<unsigned>(
+                    static_cast<const std::uint16_t*>(scale_data)[row0 + gid + lid * 8]);
+            }
+            const unsigned top_scale_bits = __shfl_sync(kMask, lane_scale, lane & ~3);
+            const unsigned bottom_scale_bits = __shfl_sync(kMask, lane_scale, (lane & ~3) + 1);
+            top_scale =
+                __bfloat162float(__ushort_as_bfloat16(static_cast<std::uint16_t>(top_scale_bits)));
+            bottom_scale = __bfloat162float(
+                __ushort_as_bfloat16(static_cast<std::uint16_t>(bottom_scale_bits)));
         }
-        const unsigned top_scale_bits    = __shfl_sync(kMask, lane_scale, lane & ~3);
-        const unsigned bottom_scale_bits = __shfl_sync(kMask, lane_scale, (lane & ~3) + 1);
-        const float top_scale =
-            __bfloat162float(__ushort_as_bfloat16(static_cast<std::uint16_t>(top_scale_bits)));
-        const float bottom_scale =
-            __bfloat162float(__ushort_as_bfloat16(static_cast<std::uint16_t>(bottom_scale_bits)));
 
 #pragma unroll
         for (int token_mma = 0; token_mma < kTokenMmas; ++token_mma) {

@@ -99,16 +99,17 @@ MoePlan bind_mtp_moe(artifact::Binder& binder, const std::string& prefix,
 
 FullAttentionPlan
 bind_attention(artifact::Binder& binder, const std::string& prefix,
+               NumericFormat projection_format,
                artifact::TensorPlacement placement = artifact::TensorPlacement::Device) {
     return {
         .query_gate =
-            device(binder, prefix + "q_proj.weight", NumericFormat::BF16, {12288, 2560}, placement),
+            device(binder, prefix + "q_proj.weight", projection_format, {12288, 2560}, placement),
         .key =
-            device(binder, prefix + "k_proj.weight", NumericFormat::BF16, {512, 2560}, placement),
+            device(binder, prefix + "k_proj.weight", projection_format, {512, 2560}, placement),
         .value =
-            device(binder, prefix + "v_proj.weight", NumericFormat::BF16, {512, 2560}, placement),
+            device(binder, prefix + "v_proj.weight", projection_format, {512, 2560}, placement),
         .output =
-            device(binder, prefix + "o_proj.weight", NumericFormat::BF16, {2560, 6144}, placement),
+            device(binder, prefix + "o_proj.weight", projection_format, {2560, 6144}, placement),
         .query_norm =
             device(binder, prefix + "q_norm.weight", NumericFormat::BF16, {256}, placement),
         .key_norm = device(binder, prefix + "k_norm.weight", NumericFormat::BF16, {256}, placement),
@@ -121,7 +122,8 @@ bind_attention(artifact::Binder& binder, const std::string& prefix,
     };
 }
 
-GdnPlan bind_gdn(artifact::Binder& binder, const std::string& prefix) {
+GdnPlan bind_gdn(artifact::Binder& binder, const std::string& prefix,
+                 NumericFormat projection_format) {
     return {
         .a_log       = device(binder, prefix + "A_log", NumericFormat::FP32, {48}),
         .dt_bias     = device(binder, prefix + "dt_bias", NumericFormat::FP32, {48}),
@@ -131,11 +133,11 @@ GdnPlan bind_gdn(artifact::Binder& binder, const std::string& prefix) {
         .b_projection =
             device(binder, prefix + "in_proj_b.weight", NumericFormat::BF16, {48, 2560}),
         .query_key_value =
-            device(binder, prefix + "in_proj_qkv.weight", NumericFormat::BF16, {10240, 2560}),
+            device(binder, prefix + "in_proj_qkv.weight", projection_format, {10240, 2560}),
         .output_gate =
-            device(binder, prefix + "in_proj_z.weight", NumericFormat::BF16, {6144, 2560}),
+            device(binder, prefix + "in_proj_z.weight", projection_format, {6144, 2560}),
         .norm   = device(binder, prefix + "norm.weight", NumericFormat::BF16, {128}),
-        .output = device(binder, prefix + "out_proj.weight", NumericFormat::BF16, {2560, 6144}),
+        .output = device(binder, prefix + "out_proj.weight", projection_format, {2560, 6144}),
     };
 }
 
@@ -213,7 +215,8 @@ VisionPlan bind_vision(artifact::Binder& binder, artifact::TensorPlacement place
 } // namespace
 
 ArtifactLoadPlan plan_artifact(artifact::Binder& binder,
-                               qwen3_8_flash_next::StartupFeatures features) {
+                               qwen3_8_flash_next::StartupFeatures features,
+                               detail::WeightsProfile profile) {
     static constexpr std::array<std::string_view, 6> resources = {
         "frontend/tokenizer.json",           "frontend/tokenizer_config.json",
         "frontend/chat_template.jinja",      "frontend/generation_config.json",
@@ -221,6 +224,9 @@ ArtifactLoadPlan plan_artifact(artifact::Binder& binder,
     };
     ArtifactLoadPlan out;
     out.bindings.features = features;
+    out.bindings.projection_format =
+        profile == detail::WeightsProfile::Nvfp4 ? NumericFormat::BF16
+                                                 : NumericFormat::FP8_E4M3FN_BLOCK128_F32S;
     for (std::size_t i = 0; i < resources.size(); ++i) {
         out.bindings.frontend[i] = artifact::bind_raw_resource(binder, resources[i]);
     }
@@ -232,9 +238,11 @@ ArtifactLoadPlan plan_artifact(artifact::Binder& binder,
         target.attention_hc      = bind_hc(binder, prefix + "attn_hyper_connection.");
         target.is_full_attention = layer >= 3 && (layer - 3) % 4 == 0;
         if (target.is_full_attention) {
-            target.attention = bind_attention(binder, prefix + "self_attn.");
+            target.attention = bind_attention(binder, prefix + "self_attn.",
+                                              out.bindings.projection_format);
         } else {
-            target.gdn = bind_gdn(binder, prefix + "linear_attn.");
+            target.gdn = bind_gdn(binder, prefix + "linear_attn.",
+                                  out.bindings.projection_format);
         }
         target.has_ple = layer == 1;
         if (target.has_ple) {
@@ -270,7 +278,8 @@ ArtifactLoadPlan plan_artifact(artifact::Binder& binder,
     mtp.hidden_projection =
         device(binder, "mtp.fc_hidden.weight", NumericFormat::BF16, {2560, 2560}, mtp_placement);
     mtp.attention_hc = bind_hc(binder, "mtp.layers.0.attn_hyper_connection.", mtp_placement);
-    mtp.attention    = bind_attention(binder, "mtp.layers.0.self_attn.", mtp_placement);
+    mtp.attention    = bind_attention(binder, "mtp.layers.0.self_attn.", NumericFormat::BF16,
+                                     mtp_placement);
     mtp.mlp_hc       = bind_hc(binder, "mtp.layers.0.mlp_hyper_connection.", mtp_placement);
     mtp.moe          = bind_mtp_moe(binder, "mtp.layers.0.mlp.", mtp_placement);
     mtp.final_hc     = bind_final_hc(binder, "mtp.hyper_connection_mixer.", mtp_placement);

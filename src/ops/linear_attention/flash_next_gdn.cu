@@ -135,6 +135,23 @@ void require_weight(const Weight& weight, int rows, int columns, const char* lab
     }
 }
 
+void require_projection(const Weight& weight, int rows, int columns, const char* label) {
+    if (weight.n != rows || weight.k != columns || weight.qdata == nullptr ||
+        (weight.qtype != QType::BF16_CTRL &&
+         weight.qtype != QType::FP8_E4M3FN_BLOCK128_F32S)) {
+        throw std::invalid_argument(label);
+    }
+}
+
+void project(const Tensor& input, const Weight& weight, Tensor& output, WorkspaceArena& workspace,
+             cudaStream_t stream, Bf16GemmContext* bf16_gemm = nullptr) {
+    if (weight.qtype == QType::FP8_E4M3FN_BLOCK128_F32S) {
+        linear(input, weight, output, LinearPolicy::A16Only, workspace, stream);
+    } else {
+        linear(input, weight, output, stream, bf16_gemm);
+    }
+}
+
 void validate(const Tensor& input, const FlashNextGdnWeights& weights,
               const Tensor& conv_in, const Tensor& conv_out, const Tensor& recurrent_in,
               const Tensor& recurrent_out, const Tensor& destination) {
@@ -162,17 +179,18 @@ void validate(const Tensor& input, const FlashNextGdnWeights& weights,
                    "flash_next_gdn: invalid a projection");
     require_weight(weights.b_projection, kHeads, kHidden,
                    "flash_next_gdn: invalid b projection");
-    require_weight(weights.query_key_value, kConvolution, kHidden,
+    require_projection(weights.query_key_value, kConvolution, kHidden,
                    "flash_next_gdn: invalid qkv projection");
-    require_weight(weights.output_gate, kValue, kHidden,
+    require_projection(weights.output_gate, kValue, kHidden,
                    "flash_next_gdn: invalid output gate projection");
-    require_weight(weights.output, kHidden, kValue,
+    require_projection(weights.output, kHidden, kValue,
                    "flash_next_gdn: invalid output projection");
 }
 
 } // namespace
 
-std::size_t flash_next_gdn_workspace_capacity_bytes(std::int32_t tokens) {
+std::size_t flash_next_gdn_workspace_capacity_bytes(std::int32_t tokens,
+                                                     QType projection_qtype) {
     if (tokens <= 0) { throw std::invalid_argument("Flash-Next GDN tokens must be positive"); }
     WorkspaceLayoutBuilder layout;
     (void)layout.alloc(DType::BF16, {kHeads, tokens});
@@ -188,6 +206,8 @@ std::size_t flash_next_gdn_workspace_capacity_bytes(std::int32_t tokens) {
     (void)layout.alloc(DType::BF16, {kValue, tokens});
     (void)layout.alloc_bytes(gated_delta_net_workspace_capacity_bytes(
         kQkHeads, kHeads, true, tokens, tokens));
+    (void)layout.alloc_bytes(linear_workspace_capacity_bytes(
+        projection_qtype, kConvolution, kHidden, LinearPolicy::A16Only, 1, tokens));
     return layout.peak_bytes(1);
 }
 
@@ -222,8 +242,8 @@ void flash_next_gdn(const Tensor& input, const FlashNextGdnWeights& weights,
 
     Tensor projected = workspace.alloc(DType::BF16, {kConvolution, tokens});
     Tensor z = workspace.alloc(DType::BF16, {kValue, tokens});
-    linear(input, weights.query_key_value, projected, stream, bf16_gemm);
-    linear(input, weights.output_gate, z, stream, bf16_gemm);
+    project(input, weights.query_key_value, projected, workspace, stream, bf16_gemm);
+    project(input, weights.output_gate, z, workspace, stream, bf16_gemm);
     Tensor q = workspace.alloc(DType::BF16, {kQk, tokens});
     Tensor k = workspace.alloc(DType::BF16, {kQk, tokens});
     Tensor v = workspace.alloc(DType::BF16, {kValue, tokens});
@@ -244,7 +264,7 @@ void flash_next_gdn(const Tensor& input, const FlashNextGdnWeights& weights,
     Tensor normalized_heads = normalized.view({kDim, kHeads, tokens});
     sigmoid_gated_rmsnorm(recurrent_heads, weights.norm, z_heads, 1.0e-6F,
                           normalized_heads, stream);
-    linear(normalized, weights.output, destination, stream, bf16_gemm);
+    project(normalized, weights.output, destination, workspace, stream, bf16_gemm);
 }
 
 void flash_next_gdn_batch_update(const Tensor& input, const FlashNextGdnWeights& weights,
@@ -287,8 +307,8 @@ void flash_next_gdn_batch_update(const Tensor& input, const FlashNextGdnWeights&
 
     Tensor projected = workspace.alloc(DType::BF16, {kConvolution, batch});
     Tensor z = workspace.alloc(DType::BF16, {kValue, batch});
-    linear(input, weights.query_key_value, projected, stream);
-    linear(input, weights.output_gate, z, stream);
+    project(input, weights.query_key_value, projected, workspace, stream);
+    project(input, weights.output_gate, z, workspace, stream);
     Tensor convolved = workspace.alloc(DType::BF16, {kConvolution, batch});
     Tensor convolution_weight = weights.convolution;
     Tensor projected_batch = projected.view({kConvolution, 1, batch});
@@ -309,7 +329,7 @@ void flash_next_gdn_batch_update(const Tensor& input, const FlashNextGdnWeights&
     Tensor normalized_heads = normalized.view({kDim, kHeads, batch});
     sigmoid_gated_rmsnorm(recurrent_heads, weights.norm, z_heads, 1.0e-6F,
                           normalized_heads, stream);
-    linear(normalized, weights.output, destination, stream);
+    project(normalized, weights.output, destination, workspace, stream);
 }
 
 void flash_next_gdn_replay_record(const Tensor& input, const FlashNextGdnWeights& weights,
@@ -364,8 +384,8 @@ void flash_next_gdn_replay_record(const Tensor& input, const FlashNextGdnWeights
     CUDA_CHECK(cudaGetLastError());
     Tensor projected = workspace.alloc(DType::BF16, {kConvolution, tokens});
     Tensor z = workspace.alloc(DType::BF16, {kValue, tokens});
-    linear(input, weights.query_key_value, projected, stream);
-    linear(input, weights.output_gate, z, stream);
+    project(input, weights.query_key_value, projected, workspace, stream);
+    project(input, weights.output_gate, z, workspace, stream);
     Tensor q = workspace.alloc(DType::BF16, {kQk, tokens});
     Tensor k = workspace.alloc(DType::BF16, {kQk, tokens});
     Tensor v = workspace.alloc(DType::BF16, {kValue, tokens});
@@ -398,7 +418,7 @@ void flash_next_gdn_replay_record(const Tensor& input, const FlashNextGdnWeights
     Tensor normalized_heads = normalized.view({kDim, kHeads, tokens});
     sigmoid_gated_rmsnorm(recurrent_heads, weights.norm, z_heads, 1.0e-6F,
                           normalized_heads, stream);
-    linear(normalized, weights.output, destination, stream);
+    project(normalized, weights.output, destination, workspace, stream);
 }
 
 } // namespace ninfer::ops

@@ -13,12 +13,18 @@ int main() {
     try {
         ninfer::artifact::Reader reader{std::filesystem::path(path)};
         if (reader.identity().model_id != ninfer::targets::qwen3_8_flash_next_125b_a6b::kModelId ||
-            reader.identity().weights_id !=
-                ninfer::targets::qwen3_8_flash_next_125b_a6b::kWeightsId) {
+            (reader.identity().weights_id !=
+                 ninfer::targets::qwen3_8_flash_next_125b_a6b::kWeightsId &&
+             reader.identity().weights_id !=
+                 ninfer::targets::qwen3_8_flash_next_125b_a6b::kMixedWeightsId)) {
             throw std::runtime_error("Flash-Next artifact identity mismatch");
         }
+        const auto profile = reader.identity().weights_id ==
+                                     ninfer::targets::qwen3_8_flash_next_125b_a6b::kWeightsId
+                                 ? ninfer::targets::qwen3_8_flash_next_125b_a6b::detail::WeightsProfile::Nvfp4
+                                 : ninfer::targets::qwen3_8_flash_next_125b_a6b::detail::WeightsProfile::Nvfp4Fp8Projections;
         ninfer::artifact::Binder binder(reader);
-        const auto plan = ninfer::targets::qwen3_8_flash_next_125b_a6b::plan_artifact(binder);
+        const auto plan = ninfer::targets::qwen3_8_flash_next_125b_a6b::plan_artifact(binder, {}, profile);
         if (plan.materialization.file_backed_objects.size() != 1 ||
             plan.materialization.file_backed_objects.front().object.index != plan.ple_table.index) {
             throw std::runtime_error("PLE table is not the sole file-backed object");
@@ -28,7 +34,7 @@ int main() {
         }
         ninfer::artifact::Binder mtp_binder(reader);
         const auto mtp_plan = ninfer::targets::qwen3_8_flash_next_125b_a6b::plan_artifact(
-            mtp_binder, {.speculative = ninfer::SpeculativeBackend::Mtp});
+            mtp_binder, {.speculative = ninfer::SpeculativeBackend::Mtp}, profile);
         if (mtp_plan.materialization.device_objects.size() != 1291 ||
             mtp_plan.materialization.device_capacity_bytes <=
                 plan.materialization.device_capacity_bytes) {
@@ -36,7 +42,7 @@ int main() {
         }
         ninfer::artifact::Binder full_binder(reader);
         const auto full_plan = ninfer::targets::qwen3_8_flash_next_125b_a6b::plan_artifact(
-            full_binder, {.vision = true, .speculative = ninfer::SpeculativeBackend::Mtp});
+            full_binder, {.vision = true, .speculative = ninfer::SpeculativeBackend::Mtp}, profile);
         if (full_plan.materialization.device_objects.size() != 1624 ||
             full_plan.materialization.device_capacity_bytes <=
                 mtp_plan.materialization.device_capacity_bytes) {

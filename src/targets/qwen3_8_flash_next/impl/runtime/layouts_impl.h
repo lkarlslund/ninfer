@@ -334,7 +334,9 @@ WorkspacePlan build_workspace_plan(const SequencePlanImpl& plan) {
                                                                                phase, first, last));
         (void)workspace_recipe::text_attention_results<TextConfig>(layout, last);
         if constexpr (Variant::flash_next) {
-            scratch(layout, ops::flash_next_qsa_workspace_capacity_bytes(last, plan.capacity));
+            scratch(layout, ops::flash_next_qsa_workspace_capacity_bytes(
+                                last, plan.capacity,
+                                Variant::main_projection_qtype(plan.weights_profile)));
         } else {
             scratch(layout,
                     ops::causal_softmax_attention_workspace_capacity_bytes(
@@ -395,7 +397,8 @@ WorkspacePlan build_workspace_plan(const SequencePlanImpl& plan) {
                 matrix(layout, DType::BF16, 10240, last);
                 scratch(layout, ops::flash_next_ple_workspace_capacity_bytes(last));
             }
-            scratch(layout, ops::flash_next_gdn_workspace_capacity_bytes(last));
+            scratch(layout, ops::flash_next_gdn_workspace_capacity_bytes(
+                                last, Variant::main_projection_qtype(plan.weights_profile)));
         }
         attention_stage(layout, first, last, phase, batch_size, min_width, max_width, envelope);
         gdn_stage(layout, first, last, phase, path, batch_size, min_width, max_width);
