@@ -53,7 +53,11 @@ rows enter device memory; the complete table is never uploaded.
 QSA projects 24 gated query heads and two K/V heads. Its indexer constructs normalized 128-wide
 query/key representations and selects causal four-token key groups before exact attention over the
 selected paged K/V positions. Main K/V, raw index keys, and MRoPE positions are persistent cache
-state. Prefill uses a tensor-core selected-attention route; decode uses the bounded split route.
+state. Main K/V may use BF16 or row-scaled FP8 E4M3; raw index keys remain BF16 and MRoPE positions
+remain I32 in both profiles. FP8 K rows apply the shared normalized D256 Hadamard transform before
+row quantization, and Q applies the same transform before the dot product. V is row-quantized
+without that transform. Prefill uses a tensor-core selected-attention route; decode uses the
+bounded split route.
 
 Each GDN layer retains three previous BF16 convolution columns and 48 FP32 recurrent matrices of
 shape `[128,128]`. PLE retains nine previous BF16 convolution columns. QSA KV/index state, GDN

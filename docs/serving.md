@@ -800,8 +800,11 @@ The table lists executable defaults. The startup example selects a long-context 
 | `--seed N` | fixed seed when a request omits one | fresh random seed per request |
 | `--greedy` | force exact argmax for all requests | off |
 
-Qwen3.8 Flash-Next 125B-A6B requires `--kv-dtype bf16`, accepts MTP draft lengths 1 through 3,
-and requires enough GPU memory for approximately 77.8 GB of resident startup weights plus the
+Qwen3.8 Flash-Next 125B-A6B accepts `--kv-dtype bf16` (the default throughput profile) or
+`--kv-dtype fp8` (the lower-residency profile), and MTP draft lengths 1 through 3. Other KV formats
+are rejected for this target. At 262,144 tokens FP8 saves about 3.20 GB without MTP and 3.46 GB
+with MTP3; [performance](performance.md) records the measured speed and quality tradeoff. The
+target requires enough GPU memory for approximately 77.8 GB of resident startup weights plus the
 configured context and runtime state. Its PLE table remains file-backed and is not part of GPU
 residency.
 

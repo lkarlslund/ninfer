@@ -240,8 +240,12 @@ depends on the selected artifact, GPU memory, media workload, output budget, and
 Artifact identity selects the weight profile;
 `--kv-dtype` selects runtime KV storage. The prepared prompt must fit
 `--max-context`; generation stops at the remaining context capacity when necessary.
-Qwen3.8 Flash-Next 125B-A6B requires `--kv-dtype bf16`, supports at most three MTP draft tokens,
-and needs a GPU large enough for its approximately 77.8 GB startup residency plus runtime state.
+Qwen3.8 Flash-Next 125B-A6B supports `--kv-dtype bf16` and `--kv-dtype fp8` and at most three MTP
+draft tokens. BF16 is the throughput profile and remains the default. Row-scaled FP8 E4M3 is the
+capacity profile: at 262,144 tokens it saves about 3.20 GB without MTP and 3.46 GB with MTP3, with
+the measured throughput tradeoff recorded in [performance](performance.md). Other KV formats are
+rejected for this target. Flash-Next needs a GPU large enough for its approximately 77.8 GB startup
+residency plus runtime state.
 `--kv-capacity N` controls the shared physical Main Text KV pool independently and is rounded up to
 the 64-token page size. `--kv-capacity auto` loads the selected weights, measures the remaining GPU
 memory, and directly chooses the largest legal page capacity for the complete enabled runtime

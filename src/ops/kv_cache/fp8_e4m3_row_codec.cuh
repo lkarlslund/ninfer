@@ -4,7 +4,10 @@
 // Persistent scales cross one FP16 represented-value boundary before codes are formed.
 
 #include "ops/kernel/paged_kv_address.cuh"
+#include "ops/common/warp.cuh"
+#include "ops/kv_cache/hadamard_d256.cuh"
 
+#include <cuda_bf16.h>
 #include <cuda_fp16.h>
 #include <cuda_fp8.h>
 
@@ -76,6 +79,62 @@ __device__ __forceinline__ __half2 kv_cache_fp8_code2_to_half2(std::uint16_t sto
 __device__ __forceinline__ __half2 kv_cache_fp8_dequant_code2_to_half2(std::uint16_t storage,
                                                                        __half scale) {
     return __hmul2(kv_cache_fp8_code2_to_half2(storage), __halves2half2(scale, scale));
+}
+
+__device__ __forceinline__ float kv_cache_fp8_dequant_code_to_float(std::uint8_t storage,
+                                                                     __half scale) {
+    __nv_fp8_e4m3 value;
+    value.__x = storage;
+    return static_cast<float>(value) * __half2float(scale);
+}
+
+template <typename Geometry>
+__device__ __forceinline__ void
+kv_cache_append_full_fp8_row(const __nv_bfloat16* __restrict__ k,
+                             const __nv_bfloat16* __restrict__ v,
+                             std::uint8_t* __restrict__ cache_k, std::uint8_t* __restrict__ cache_v,
+                             __half* __restrict__ scale_k, __half* __restrict__ scale_v, int token,
+                             int kv_head, int physical_page, int page_off, int lane) {
+    float values[8];
+    float local_absmax = 0.0F;
+#pragma unroll
+    for (int r = 0; r < 8; ++r) {
+        const int d = lane + 32 * r;
+        values[r]   = __bfloat162float(k[kv_cache_fp8_src_index<Geometry>(kv_head, d, token)]);
+    }
+    normalized_hadamard_d256_inplace(values, lane);
+#pragma unroll
+    for (float value : values) { local_absmax = fmaxf(local_absmax, fabsf(value)); }
+    const auto k_quant = kv_cache_fp8_quant_params(warp_max(local_absmax));
+#pragma unroll
+    for (int r = 0; r < 8; ++r) {
+        const int d = lane + 32 * r;
+        cache_k[kv_cache_fp8_code_index<Geometry>(physical_page, kv_head, d, page_off)] =
+            kv_cache_fp8_quant_code(values[r], k_quant.inverse_scale);
+    }
+    if (lane == 0) {
+        scale_k[kv_cache_fp8_scale_index<Geometry>(physical_page, kv_head, page_off)] =
+            k_quant.scale;
+    }
+
+    local_absmax = 0.0F;
+#pragma unroll
+    for (int r = 0; r < 8; ++r) {
+        const int d  = lane + 32 * r;
+        values[r]    = __bfloat162float(v[kv_cache_fp8_src_index<Geometry>(kv_head, d, token)]);
+        local_absmax = fmaxf(local_absmax, fabsf(values[r]));
+    }
+    const auto v_quant = kv_cache_fp8_quant_params(warp_max(local_absmax));
+#pragma unroll
+    for (int r = 0; r < 8; ++r) {
+        const int d = lane + 32 * r;
+        cache_v[kv_cache_fp8_code_index<Geometry>(physical_page, kv_head, d, page_off)] =
+            kv_cache_fp8_quant_code(values[r], v_quant.inverse_scale);
+    }
+    if (lane == 0) {
+        scale_v[kv_cache_fp8_scale_index<Geometry>(physical_page, kv_head, page_off)] =
+            v_quant.scale;
+    }
 }
 
 } // namespace ninfer::ops

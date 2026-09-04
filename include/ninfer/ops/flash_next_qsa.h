@@ -55,8 +55,9 @@ void flash_next_expand_text_positions(const Tensor& positions, Tensor& mrope_pos
                                       cudaStream_t stream);
 
 // Complete exact QSA attention leaf. `cache_positions` is I32 [W,B], `rope_positions`
-// is I32 [W,B,3], `valid_columns` and `table_rows` are I32 [B]. The cache owns BF16
-// main K/V followed by auxiliary raw-index-key BF16 and MRoPE-position I32 planes.
+// is I32 [W,B,3], `valid_columns` and `table_rows` are I32 [B]. The cache owns BF16 or
+// row-scaled FP8 E4M3 main K/V followed by auxiliary raw-index-key BF16 and MRoPE-position I32
+// planes.
 void flash_next_qsa(const Tensor& input, const Tensor& cache_positions,
                     const Tensor& rope_positions, const Tensor& valid_columns,
                     const Tensor& table_rows, const FlashNextQsaWeights& weights,

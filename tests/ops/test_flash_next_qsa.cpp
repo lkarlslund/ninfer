@@ -37,6 +37,12 @@ void store_bf16(DeviceBuffer& storage, std::size_t element, float value) {
 }
 
 int run() {
+    constexpr std::size_t kFullContextPrefillWorkspace = 2879492096ULL;
+    if (ops::flash_next_qsa_workspace_capacity_bytes(8192, 262144) !=
+        kFullContextPrefillWorkspace) {
+        std::cerr << "Flash-Next QSA full-context prefill workspace regressed\n";
+        return 1;
+    }
     std::vector<float> input(kHidden, 0.0F);
     input[0] = 0.5F;
     input[1] = 0.25F;
@@ -140,6 +146,55 @@ int run() {
     d_v_pages.copy_to_host(&cached_value, sizeof(cached_value));
     if (cached_value != 0x3f00U) {
         std::cerr << "Flash-Next QSA did not commit its projected value to the cache\n";
+        ++failures;
+    }
+
+    // Exercise the public FP8 cache profile through the same complete leaf. The one-token
+    // attention result is independent of the represented K value and the projected V=0.5 is
+    // exactly representable by the row-scaled E4M3 codec.
+    DeviceBuffer d_fp8_k_pages(static_cast<std::size_t>(kHeadDim) * 64 * 2 * kCachePages);
+    DeviceBuffer d_fp8_v_pages(static_cast<std::size_t>(kHeadDim) * 64 * 2 * kCachePages);
+    DeviceBuffer d_fp8_k_scales(static_cast<std::size_t>(64) * 2 * kCachePages *
+                               sizeof(std::uint16_t));
+    DeviceBuffer d_fp8_v_scales(static_cast<std::size_t>(64) * 2 * kCachePages *
+                               sizeof(std::uint16_t));
+    d_fp8_k_pages.fill();
+    d_fp8_v_pages.fill();
+    d_fp8_k_scales.fill();
+    d_fp8_v_scales.fill();
+    PagedKVBatchLayerView fp8_cache{
+        .k_pages = Tensor(d_fp8_k_pages.p, DType::FP8_E4M3FN, {kHeadDim, 64, 2, kCachePages}),
+        .v_pages = Tensor(d_fp8_v_pages.p, DType::FP8_E4M3FN, {kHeadDim, 64, 2, kCachePages}),
+        .k_scale_pages = Tensor(d_fp8_k_scales.p, DType::FP16, {1, 64, 2, kCachePages}),
+        .v_scale_pages = Tensor(d_fp8_v_scales.p, DType::FP16, {1, 64, 2, kCachePages}),
+        .block_tables = Tensor(d_table.p, DType::I32, {kCachePages, 1}),
+        .auxiliary_pages = {
+            Tensor(d_raw_pages.p, DType::BF16, {128, 64, kCachePages, 1}),
+            Tensor(d_position_pages.p, DType::I32, {3, 64, kCachePages, 1}),
+        },
+        .head_dim = kHeadDim,
+        .num_kv_heads = 2,
+        .storage = KvCacheStorage::Fp8E4M3Row256,
+    };
+    d_destination.fill();
+    workspace.reset();
+    ops::flash_next_qsa(
+        input_tensor, Tensor(d_cache_positions.p, DType::I32, {1, 1}),
+        Tensor(d_rope_positions.p, DType::I32, {1, 1, 3}),
+        Tensor(d_valid.p, DType::I32, {1}), Tensor(d_rows.p, DType::I32, {1}), weights,
+        fp8_cache, {.min_visible_keys = 1, .max_visible_keys = 1}, destination, workspace,
+        nullptr);
+    cuda_synchronize();
+    failures += verify_pointwise("Flash-Next QSA FP8 one-token attention",
+                                 from_device_bf16(d_destination.data(), kHidden), expected,
+                                 {/*absolute*/ 4.0e-3, /*relative*/ 2.0e-2});
+    failures += d_destination.verify_guards("Flash-Next QSA FP8 destination");
+    std::uint8_t cached_fp8_value = 0;
+    std::uint16_t cached_fp8_scale = 0;
+    d_fp8_v_pages.copy_to_host(&cached_fp8_value, sizeof(cached_fp8_value));
+    d_fp8_v_scales.copy_to_host(&cached_fp8_scale, sizeof(cached_fp8_scale));
+    if (cached_fp8_value == 0 || cached_fp8_scale == 0) {
+        std::cerr << "Flash-Next QSA did not commit its projected value to the FP8 cache\n";
         ++failures;
     }
 

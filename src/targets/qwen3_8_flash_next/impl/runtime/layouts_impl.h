@@ -704,8 +704,10 @@ WorkspacePlan build_workspace_plan(const SequencePlanImpl& plan) {
 
 void validate_target_options(DeviceContext& device, const EngineOptions& options) {
     if constexpr (Variant::flash_next) {
-        if (options.kv_cache != KvCacheStorage::BFloat16) {
-            throw std::invalid_argument("Qwen3.8 Flash-Next requires the bf16 K/V cache profile");
+        if (options.kv_cache != KvCacheStorage::BFloat16 &&
+            options.kv_cache != KvCacheStorage::Fp8E4M3Row256) {
+            throw std::invalid_argument(
+                "Qwen3.8 Flash-Next supports only bf16 and fp8 K/V cache profiles");
         }
     }
     if (options.max_context == 0 || options.max_context > Variant::maximum_context) {
@@ -862,8 +864,9 @@ make_sequence_planner_impl(DeviceContext& device, const EngineOptions& options,
         .kv_storage =
             [](KvCacheStorage requested) {
                 if constexpr (Variant::flash_next) {
-                    (void)requested;
-                    return KvCacheStorage::BFloat16KeyValue;
+                    return requested == KvCacheStorage::BFloat16
+                        ? KvCacheStorage::BFloat16KeyValue
+                        : requested;
                 }
                 return requested;
             }(options.kv_cache),

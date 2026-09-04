@@ -67,6 +67,29 @@ vLLM, and every measured TG point clears 1.20x.
 | 196,608 | 8,797 | 9,809 | 0.90x | 232.2 | 190.1 | 1.22x |
 | 261,632 | 8,814 | 9,371 | 0.94x | 240.9 | 191.4 | 1.26x |
 
+### Flash-Next KV profile tradeoff
+
+Flash-Next exposes BF16 as the default throughput profile and row-scaled FP8 E4M3 as an explicit
+capacity profile through `--kv-dtype`. A paired NInfer run on the same RTX PRO 6000, artifact,
+262,144-token capacity, 8,192-token chunk, CUDA Graph configuration, seven prompt lengths, 512
+generated tokens, warmup=1, and repetitions=3 measured the following FP8 changes relative to BF16:
+
+| Mode | Prefill throughput change | Decode throughput change | Runtime reservation saved |
+|---|---:|---:|---:|
+| MTP0 | −17.3% at 1K; −11.9% at 8K; −5.0% at 261K | −0.4% to −1.2% | 3,196,059,648 bytes |
+| MTP3, optimized proposal head | −15.0% at 1K; −3.0% at 8K; −5.5% at 261K | −25.8% at 1K; −6.1% at 8K; −0.3% at 261K | 3,462,462,976 bytes |
+
+The decode penalty is workload-dependent because FP8 can change the generated continuation and
+therefore MTP acceptance. The fixed `ninfer-ppl-1m-v1 --quick` corpus at context/stride 4096/2048
+scored 261,167 tokens: BF16 PPL was 3.537131 and FP8 PPL was 3.536871. This is a −0.007% aggregate
+difference, so the measured choice is capacity versus speed rather than a detectable aggregate
+quality loss on that corpus.
+
+Independent of KV format, Flash-Next QSA workspace planning now reserves its hierarchical
+candidate buffers only for the `tokens <= 16` route that allocates them. At prefill chunk 8,192 and
+maximum context 262,144 this removes 2,147,483,648 bytes from the startup workspace reservation
+without changing execution.
+
 NInfer startup is 23.5–25.2 seconds for the measured profiles. About 21.6–23.1 seconds is artifact
 read/upload; the remaining time pins Host state/KV and prepares CUDA Graphs. The base MTP0
 residency is 77,843,526,912 bytes, while MTP3 with the optimized proposal head is 83,258,958,592
