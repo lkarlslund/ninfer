@@ -1,5 +1,18 @@
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
+add_test(NAME ninfer_flash_next_performance_report_test
+  COMMAND ${Python3_EXECUTABLE} -m unittest tests/test_flash_next_performance.py)
+set_tests_properties(ninfer_flash_next_performance_report_test PROPERTIES
+  WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+
+if(NINFER_PERFORMANCE_TRACE)
+  add_executable(ninfer_performance_trace_fixture performance_trace_fixture.cu)
+  target_include_directories(ninfer_performance_trace_fixture PRIVATE
+    ${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/src)
+  target_link_libraries(ninfer_performance_trace_fixture PRIVATE ninfer_ops)
+  add_test(NAME ninfer_performance_trace_fixture COMMAND ninfer_performance_trace_fixture)
+endif()
+
 # This target deliberately receives no src/, CUDA, artifact, kernel, or target
 # include root. It proves that the installed product headers stand alone.
 add_executable(ninfer_public_api_test test_public_api.cpp)

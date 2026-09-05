@@ -1,5 +1,7 @@
 #include "ninfer/ops/flash_next_gdn.h"
 
+#include "ops/flash_next_work.h"
+
 #include "core/layout.h"
 #include "core/device.h"
 #include "ninfer/ops/causal_conv1d_silu.h"
@@ -196,6 +198,9 @@ void flash_next_gdn(const Tensor& input, const FlashNextGdnWeights& weights,
                     const Tensor& recurrent_state_in, Tensor& recurrent_state_out,
                     Tensor& destination, WorkspaceArena& workspace, cudaStream_t stream,
                     Bf16GemmContext* bf16_gemm) {
+    NINFER_PERF_SCOPE("gdn.prefill", input.ne[1], 1, 0,
+                       flash_next_work::gdn(input.ne[1], 1, false, true));
+
     validate(input, weights, convolution_state_in, convolution_state_out, recurrent_state_in,
              recurrent_state_out, destination);
     const int tokens = input.ne[1];
@@ -252,6 +257,9 @@ void flash_next_gdn_batch_update(const Tensor& input, const FlashNextGdnWeights&
                                  const Tensor& source_slots, const Tensor& destination_slots,
                                  Tensor& destination, WorkspaceArena& workspace,
                                  cudaStream_t stream) {
+    NINFER_PERF_SCOPE("gdn.update", input.ne[1], input.ne[1], 0,
+                       flash_next_work::gdn(input.ne[1], input.ne[1], false));
+
     const int batch = input.ne[1];
     if (batch <= 0 || batch > 8 || input.dtype != DType::BF16 || !input.is_contiguous() ||
         input.ne[0] != kHidden || destination.dtype != DType::BF16 ||
@@ -318,6 +326,9 @@ void flash_next_gdn_replay_record(const Tensor& input, const FlashNextGdnWeights
                                   const Tensor& valid_columns, const Tensor& source_slots,
                                   GdnReplayRecordLayer records, Tensor& destination,
                                   WorkspaceArena& workspace, cudaStream_t stream) {
+    NINFER_PERF_SCOPE("gdn.record", input.ne[1], records.conv.ne[2], 0,
+                       flash_next_work::gdn(input.ne[1], records.conv.ne[2], true));
+
     const int width = records.conv.ne[1];
     const int batch = records.conv.ne[2];
     const int tokens = width * batch;

@@ -1,5 +1,7 @@
 #include "ninfer/ops/flash_next_moe.h"
 
+#include "ops/flash_next_work.h"
+
 #include "core/device.h"
 #include "ninfer/ops/linear.h"
 #include "ninfer/ops/silu_mul.h"
@@ -723,6 +725,10 @@ std::size_t flash_next_moe_workspace_capacity_bytes(std::int32_t tokens) {
 void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Tensor& destination,
                     WorkspaceArena& workspace, cudaStream_t stream, Bf16GemmContext* bf16_gemm,
                     bool wide_decode_gate) {
+    NINFER_PERF_SCOPE(weights.routed_gate_up.qtype == QType::NVFP4 ? "moe.nvfp4" : "moe.bf16",
+                       input.ne[1], 0, 0,
+                       flash_next_work::moe(input.ne[1], weights.routed_gate_up.qtype == QType::NVFP4));
+
     const int tokens = input.ne[1];
     if (input.dtype != DType::BF16 || !input.is_contiguous() || input.ne[0] != kHidden ||
         tokens <= 0 || destination.dtype != DType::BF16 || !destination.is_contiguous() ||

@@ -1,5 +1,7 @@
 #include "ninfer/ops/hyperconnection.h"
 
+#include "ops/flash_next_work.h"
+
 #include "core/device.h"
 #include "ninfer/ops/linear.h"
 #include "ops/linear/bf16/bf16_launch.h"
@@ -388,6 +390,9 @@ void finish_mix(const Tensor& normalized, const HyperConnectionWeights& weights,
 } // namespace
 
 void hyperconnection_repeat(const Tensor& input, Tensor& hyper, cudaStream_t stream) {
+    NINFER_PERF_SCOPE("hyper.repeat", input.ne[1], 0, 0,
+                       flash_next_work::dense(0, input.ne[1], 2 * (2560 + 10240) * input.ne[1]));
+
     if (input.dtype != DType::BF16 || !input.is_contiguous() || input.ne[0] != kHidden ||
         input.ne[1] <= 0 || input.ne[2] != 1 || input.ne[3] != 1 || input.data == nullptr ||
         hyper.dtype != DType::BF16 || !hyper.is_contiguous() || hyper.ne[0] != kHyper ||
@@ -403,6 +408,9 @@ void hyperconnection_repeat(const Tensor& input, Tensor& hyper, cudaStream_t str
 
 void hyperconnection_add_repeated(const Tensor& embedding, Tensor& hyper,
                                   cudaStream_t stream) {
+    NINFER_PERF_SCOPE("hyper.add", embedding.ne[1], 0, 0,
+                       flash_next_work::dense(0, embedding.ne[1], 2 * (2560 + 2 * 10240) * embedding.ne[1]));
+
     if (embedding.dtype != DType::BF16 || !embedding.is_contiguous() ||
         embedding.ne[0] != kHidden || embedding.ne[1] <= 0 || embedding.ne[2] != 1 ||
         embedding.ne[3] != 1 || embedding.data == nullptr || hyper.dtype != DType::BF16 ||
@@ -432,6 +440,9 @@ std::size_t hyperconnection_mix_workspace_capacity_bytes(std::int32_t tokens,
 void hyperconnection_mix(const Tensor& hyper, const HyperConnectionWeights& weights,
                          Tensor& block_input, Tensor* injection, WorkspaceArena& workspace,
                          cudaStream_t stream, Bf16GemmContext* bf16_gemm) {
+    NINFER_PERF_SCOPE("hyper.mix", hyper.ne[1], 0, 0,
+                       flash_next_work::hyper(hyper.ne[1], injection != nullptr, false));
+
     validate(hyper, weights, block_input, injection);
     const int tokens = hyper.ne[1];
     auto scope = workspace.scope();
@@ -449,6 +460,9 @@ void hyperconnection_combine_mix(Tensor& hyper, const Tensor& previous_block_out
                                  Tensor& block_input, Tensor* injection,
                                  WorkspaceArena& workspace, cudaStream_t stream,
                                  Bf16GemmContext* bf16_gemm) {
+    NINFER_PERF_SCOPE("hyper.combine_mix", hyper.ne[1], 0, 0,
+                       flash_next_work::hyper(hyper.ne[1], injection != nullptr, true));
+
     validate(hyper, weights, block_input, injection);
     validate_combine_inputs(hyper, previous_block_output, previous_injection);
     const int tokens = hyper.ne[1];
@@ -466,6 +480,9 @@ void hyperconnection_combine_mix(Tensor& hyper, const Tensor& previous_block_out
 
 void hyperconnection_combine(Tensor& hyper, const Tensor& block_output, const Tensor& injection,
                              cudaStream_t stream) {
+    NINFER_PERF_SCOPE("hyper.combine", hyper.ne[1], 0, 0,
+                       flash_next_work::dense(0, hyper.ne[1], 2 * (2 * 10240 + 2560 + 4) * hyper.ne[1]));
+
     validate_combine_inputs(hyper, block_output, injection);
     constexpr int block = 256;
     combine_kernel<<<grid_for(hyper.numel()), block, 0, stream>>>(

@@ -67,6 +67,42 @@ vLLM, and every measured TG point clears 1.20x.
 | 196,608 | 8,797 | 9,809 | 0.90x | 232.2 | 190.1 | 1.22x |
 | 261,632 | 8,814 | 9,371 | 0.94x | 240.9 | 191.4 | 1.26x |
 
+### Flash-Next tuning baseline
+
+The 2026-09-05 tuning baseline uses the original Flash-Next implementation with performance
+annotations disabled, one request, BF16 KV, CUDA Graph decode, greedy selection, no prefix reuse,
+a 73,728-token capacity and an 8,192-token prefill chunk. Hardware is RTX PRO 6000 Blackwell
+Workstation Edition with a 450 W power limit, CUDA compile/runtime/driver 13.3. Each point has one
+warmup and five measured repetitions with warm file-backed PLE pages. The explicitly selected
+artifact is `out/candidate-hybrid-q4/qwen3_8_flash_next_125b_a6b_nvfp4.ninfer`, the registered
+NVFP4 identity with the 147,456-row Q4 optimized proposal head. The similarly named top-level
+artifact has an older proposal-head inventory and is not the artifact used here.
+
+Commands use `ninfer_bench --corpus bench/fixtures/qwen3_8_flash_next_context.ids
+-pg '8192,512;65536,512' --max-ctx 73728 --prefill-chunk 8192 --kv-dtype bf16
+--warmup 1 -r 5`, with `--mtp-draft-tokens 0` or `--mtp-draft-tokens 3 --lm-head-draft`.
+Each request therefore has 513 total outputs, including 512 decode outputs. This is a fresh
+NInfer tuning baseline, not an exact reproduction of the preceding vLLM comparison.
+
+Median tokens/s, with the five-run min–max range in parentheses:
+
+| Mode | Prompt | PP | Committed TG |
+|---|---:|---:|---:|
+| MTP0 | 8,192 | 12,226 (12,169–12,281) | 95.8 (95.8–95.9) |
+| MTP0 | 65,536 | 10,957 (10,829–11,092) | 91.6 (91.5–91.6) |
+| MTP3 | 8,192 | 11,234 (11,208–11,313) | 260.5 (260.3–260.5) |
+| MTP3 | 65,536 | 10,147 (10,050–10,261) | 247.6 (247.5–247.9) |
+
+Full-model diagnostic traces at 8,192 prompt tokens and 32 decode outputs use Nsight Systems
+2026.3.1 with compile-time annotations enabled. The offline report attributes 96.8% of MTP0 and
+97.2% of MTP3 GPU work, with no partial Op instances. In MTP0, prefill GPU work is 33.4% GDN,
+21.9% MoE, 21.7% QSA and 20.8% HyperConnection. With MTP3, decode GPU work is 34.2% MoE,
+23.1% GDN, 16.8% HyperConnection and 15.5% QSA. These trace shares support attribution only;
+the throughput baseline above comes from unprofiled execution. Local JSON reports are under
+`profiles/bench/flash_next_performance/baseline/`; the
+[capture/report workflow](../tools/bench/README.md#flash-next-gpu-work-and-roofline-estimates)
+defines the cost-model limitations. The real Text/Vision/MTP/prefix integration test passed.
+
 ### Flash-Next KV profile tradeoff
 
 Flash-Next exposes BF16 as the default throughput profile and row-scaled FP8 E4M3 as an explicit

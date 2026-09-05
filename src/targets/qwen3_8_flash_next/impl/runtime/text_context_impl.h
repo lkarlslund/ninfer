@@ -3,6 +3,7 @@
 #include "targets/qwen3_8_flash_next/impl/runtime/workspace_recipe.h"
 
 #include "core/nvtx.h"
+#include "core/performance.h"
 #include "targets/qwen3_8_flash_next/impl/runtime/visual_scatter.h"
 #include "targets/qwen3_8_flash_next/impl/runtime/vision_context.h"
 #include <ninfer/targets/qwen3_8_flash_next/vision_control.h>
@@ -463,6 +464,7 @@ void TextContext::mtp_forward_flash_next(const Tensor& ids, const Tensor& hidden
                                          Tensor& sample_hidden, const Tensor* input_embeddings,
                                          Tensor& predictor_hidden, Tensor* selected_qsa_indices,
                                          const Tensor* reused_qsa_indices) {
+    NINFER_PERF_SCOPE("ninfer.region/1|predictor");
 #ifndef NINFER_QWEN38_FLASH_NEXT
     (void)ids;
     (void)hidden;
@@ -1251,6 +1253,8 @@ void TextContext::run_layers(Tensor& x, Phase ph, Tap& tap) {
 }
 
 void TextContext::run_flash_next_layers(Tensor& x, Phase ph) {
+    NINFER_PERF_SCOPE(ph == Phase::Prefill ? "ninfer.region/1|target.prefill"
+                                         : "ninfer.region/1|target.verify");
 #ifndef NINFER_QWEN38_FLASH_NEXT
     (void)x;
     (void)ph;
