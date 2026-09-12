@@ -28,6 +28,19 @@ ninfer::EngineOptions engine_options(const char* artifact) {
     return options;
 }
 
+const std::vector<ninfer::TokenId>& canonical_prompt() {
+    static const std::vector<ninfer::TokenId> prompt{
+        248045, 846, 198,  814, 20139,  303, 2250,   2716,  22157, 3069,   279, 12515,  7701, 6105,
+        2261,   279, 1834, 13,  248046, 198, 248045, 74455, 198,   248068, 271, 248069, 271};
+    return prompt;
+}
+
+const std::vector<ninfer::TokenId>& canonical_output() {
+    static const std::vector<ninfer::TokenId> output{29108, 4009, 27891, 8964, 579, 16078,
+                                                     321,   1100, 9872,  303,  660, 17425};
+    return output;
+}
+
 ninfer::RequestOptions greedy_options(std::uint32_t outputs, bool reuse) {
     ninfer::RequestOptions options;
     options.execution.requested_output_tokens = outputs;
@@ -54,11 +67,8 @@ int exercise_mtp_and_prefix(ninfer::Engine& engine) {
     // Checking semantic text would require duplicating the tokenizer in this C++ integration
     // test, so protect the exact token prefix instead. This catches numerically plausible but
     // language-corrupt model execution, including routed-MoE row-layout regressions.
-    const std::vector<ninfer::TokenId> prompt{
-        248045, 846, 198,  814, 20139,  303, 2250,   2716,  22157, 3069,   279, 12515,  7701, 6105,
-        2261,   279, 1834, 13,  248046, 198, 248045, 74455, 198,   248068, 271, 248069, 271};
-    const std::vector<ninfer::TokenId> expected_prefix{29108, 4009, 27891, 8964, 579, 16078,
-                                                       321,   1100, 9872,  303,  660, 17425};
+    const auto& prompt                   = canonical_prompt();
+    const auto& expected_prefix          = canonical_output();
     const ninfer::GenerationResult first = engine.generate(
         engine.prepare_tokens(prompt), greedy_options(expected_prefix.size(), true));
     if (first.generated_token_ids != expected_prefix ||
@@ -74,11 +84,15 @@ int exercise_mtp_and_prefix(ninfer::Engine& engine) {
     continuation.push_back(198);
     const ninfer::GenerationResult reused =
         engine.generate(engine.prepare_tokens(continuation), greedy_options(2, true));
+    const ninfer::GenerationResult cold =
+        engine.generate(engine.prepare_tokens(continuation), greedy_options(2, false));
     const std::uint32_t expected_reuse =
         static_cast<std::uint32_t>(prompt.size() + first.generated_token_ids.size() - 1);
-    if (reused.reused_prompt_tokens != expected_reuse || reused.generated_token_ids.size() != 2) {
+    if (reused.reused_prompt_tokens != expected_reuse || reused.generated_token_ids.size() != 2 ||
+        cold.reused_prompt_tokens != 0 || cold.generated_token_ids != reused.generated_token_ids) {
         std::cerr << "Flash-Next prefix reuse is incorrect: reused=" << reused.reused_prompt_tokens
-                  << " expected=" << expected_reuse << '\n';
+                  << " expected=" << expected_reuse << " cold/reused output match="
+                  << (cold.generated_token_ids == reused.generated_token_ids) << '\n';
         return 1;
     }
 
@@ -102,13 +116,40 @@ int exercise_mtp_and_prefix(ninfer::Engine& engine) {
     stopped_continuation.insert(stopped_continuation.end(), stopped.generated_token_ids.begin(),
                                 stopped.generated_token_ids.end());
     stopped_continuation.push_back(198);
-    const ninfer::GenerationResult stopped_reuse = engine.generate(
-        engine.prepare_tokens(std::move(stopped_continuation)), greedy_options(1, true));
+    const ninfer::GenerationResult stopped_reuse =
+        engine.generate(engine.prepare_tokens(stopped_continuation), greedy_options(1, true));
+    const ninfer::GenerationResult stopped_cold =
+        engine.generate(engine.prepare_tokens(stopped_continuation), greedy_options(1, false));
     const std::uint32_t expected_stopped_reuse =
         static_cast<std::uint32_t>(prompt.size() + stopped.generated_token_ids.size() - 1);
-    if (stopped_reuse.reused_prompt_tokens != expected_stopped_reuse) {
+    if (stopped_reuse.reused_prompt_tokens != expected_stopped_reuse ||
+        stopped_cold.reused_prompt_tokens != 0 ||
+        stopped_cold.generated_token_ids != stopped_reuse.generated_token_ids) {
         std::cerr << "Flash-Next partial MTP terminal reused " << stopped_reuse.reused_prompt_tokens
-                  << ", expected " << expected_stopped_reuse << '\n';
+                  << ", expected " << expected_stopped_reuse << ", cold/reused output match="
+                  << (stopped_cold.generated_token_ids == stopped_reuse.generated_token_ids)
+                  << '\n';
+        return 1;
+    }
+    return 0;
+}
+
+int exercise_ordinary_greedy(const char* artifact) {
+    ninfer::EngineOptions options    = engine_options(artifact);
+    options.speculative.backend      = ninfer::SpeculativeBackend::None;
+    options.speculative.draft_tokens = 0;
+    ninfer::Engine engine(std::move(options));
+    const ninfer::GenerationResult result =
+        engine.generate(engine.prepare_tokens(canonical_prompt()),
+                        greedy_options(canonical_output().size(), false));
+    if (result.speculative.backend != ninfer::SpeculativeBackend::None ||
+        result.generated_token_ids != canonical_output()) {
+        std::cerr << "Flash-Next ordinary greedy output disagrees with the checkpoint/MTP path\n";
+        std::cerr << "ordinary:";
+        for (const auto token : result.generated_token_ids) { std::cerr << ' ' << token; }
+        std::cerr << "\nexpected:";
+        for (const auto token : canonical_output()) { std::cerr << ' ' << token; }
+        std::cerr << '\n';
         return 1;
     }
     return 0;
@@ -147,15 +188,18 @@ int main() {
     const char* artifact = std::getenv("NINFER_QWEN38_FLASH_NEXT_WEIGHTS");
     if (artifact == nullptr || *artifact == '\0') { return 77; }
     try {
-        ninfer::Engine engine(engine_options(artifact));
-        const ninfer::LoadSummary load = engine.load_summary();
-        if (load.target != "qwen3_8_flash_next_125b_a6b" || load.weights_id != "nvfp4" ||
-            load.host_to_device_bytes == 0 || load.file_backed_bytes == 0) {
-            std::cerr << "Flash-Next Engine construction has an invalid load summary\n";
-            return 1;
+        {
+            ninfer::Engine engine(engine_options(artifact));
+            const ninfer::LoadSummary load = engine.load_summary();
+            if (load.target != "qwen3_8_flash_next_125b_a6b" || load.weights_id != "nvfp4" ||
+                load.host_to_device_bytes == 0 || load.file_backed_bytes == 0) {
+                std::cerr << "Flash-Next Engine construction has an invalid load summary\n";
+                return 1;
+            }
+            if (exercise_mtp_and_prefix(engine) != 0) { return 1; }
+            if (exercise_vision(engine) != 0) { return 1; }
         }
-        if (exercise_mtp_and_prefix(engine) != 0) { return 1; }
-        if (exercise_vision(engine) != 0) { return 1; }
+        if (exercise_ordinary_greedy(artifact) != 0) { return 1; }
         std::cout << "OK Qwen3.8 Flash Next real Engine\n";
         return 0;
     } catch (const std::exception& error) {
