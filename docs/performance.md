@@ -67,6 +67,65 @@ vLLM, and every measured TG point clears 1.20x.
 | 196,608 | 8,797 | 9,809 | 0.90x | 232.2 | 190.1 | 1.22x |
 | 261,632 | 8,814 | 9,371 | 0.94x | 240.9 | 191.4 | 1.26x |
 
+### Flash-Next QSA selected-work experiments
+
+On 2026-09-10, branch `perf/flash-next-qsa-selected-work` screened two ideas from recent
+vLLM QSA work: skip wholly padded selection tiles, and share selected K/V loads between
+neighboring prefill queries. NInfer already uses selected paged attention and incremental
+compressed index keys; the full-context-mask and full-history-pooling improvements in llama.cpp
+are not missing mechanisms here.
+
+The shared-load prototype pairs two BF16 prefill queries within a request, matches overlapping
+rows inside each 16-position tile, and reuses their staged K/V while preserving each query's
+selection order, mask, and separate softmax. It applies at even request widths above 16; other
+routes retain the original kernel. This is a conservative shared-load experiment, not a port of
+vLLM's SM121 tile-union kernel. Both candidates preserve the public selected-index representation,
+including interior padding and MTP reuse. Neither adds persistent state or workspace allocation.
+
+Qualification uses the complete QSA Op's represented-input FP64 attention oracle. Added cases
+cover 17/18-token prefill, identical/overlapping/disjoint neighboring selections, nonuniform K/V,
+complete padded tiles, a final selected entry after the holes, an inactive final query, output
+guards, and unchanged reused indices. The shared-load candidate also passes the real
+Text/Vision/MTP/prefix integration test.
+
+Measurements use RTX PRO 6000 Blackwell, sm_120a, CUDA 13.3, 450 W, the existing hybrid-Q4
+Flash-Next NVFP4 artifact, BF16 KV, context capacity 73728, chunk 8192, MTP3 with the optimized
+proposal head, and `bench/fixtures/qwen3_8_flash_next_context.ids`. Each process uses
+`-pg '1024,128;8192,128;65536,128'`, one warmup and three measured repetitions. ComfyUI was stopped;
+a process guard aborts the benchmark if an unexpected GPU compute process appears. Independent
+binaries run baseline–pruning–shared–shared–pruning–baseline. Local reports and telemetry are in
+`profiles/bench/flash_next_qsa_selected_work/`.
+
+Results and decisions:
+
+| Candidate | Observed result | Decision |
+|---|---|---|
+| Skip wholly padded tiles | Initial PP results vary with warming; refined version has no consistent PP gain and reduces 8K committed TG about 2.3–2.8% | Rejected |
+| Pair neighboring queries and share K/V staging | 8K/64K PP about 10–12% lower than adjacent pruning-only controls | Rejected |
+| Compact paired statistics, two resident CTAs, pruning disabled | 8K/64K PP about 7–9% lower than surrounding original-kernel controls; TG essentially unchanged | Rejected |
+
+The refined pruning variant replaces the existing synchronization with a tile-validity reduction
+instead of adding another barrier. Its 8K MTP acceptance still changes from 100% to 98.96%;
+committed throughput is the acceptance metric, rather than removed attention work alone.
+The final paired variant removes duplicated four-lane statistics and uses a two-block launch
+bound: compiled register use is 121 per thread, static shared memory 1344 bytes, dynamic shared
+memory 49280 bytes, and no local-memory spills. This fixes the initial occupancy limit but does
+not recover the matching/staging cost.
+
+For the final paired screen, median PP (tok/s), first/reverse comparison:
+
+| Route | 8K PP | 64K PP |
+|---|---:|---:|
+| Original kernel controls | 10799 / 10825 | 9826 / 9840 |
+| Compact shared-load candidate | 10063 / 9865 | 9110 / 8929 |
+
+The compact candidate passes the strengthened QSA oracle and real Text/Vision/MTP/prefix test.
+The original kernel is restored and the strengthened oracle also passes against it. No runtime
+optimization from this screen is retained. The strengthened tests and this result record remain;
+reports for the two refinements are in the `refined/` and `compact/` subdirectories of the campaign
+directory. These negative results concern the tested CUDA implementations; they do not measure
+vLLM's different SM121 tile-union implementation.
+
 ### Flash-Next KV profile tradeoff
 
 Flash-Next exposes BF16 as the default throughput profile and row-scaled FP8 E4M3 as an explicit

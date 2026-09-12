@@ -36,7 +36,7 @@ void store_bf16(DeviceBuffer& storage, std::size_t element, float value) {
     storage.copy_from_host(&bits, sizeof(bits), element * sizeof(bits));
 }
 
-int run() {
+int run(int kPrefillTokens) {
     constexpr std::size_t kFullContextPrefillWorkspace = 2879492096ULL;
     if (ops::flash_next_qsa_workspace_capacity_bytes(8192, 262144) !=
         kFullContextPrefillWorkspace) {
@@ -260,7 +260,6 @@ int run() {
     // values are zero, while the uniquely positive old group retains four unit values. Main Q is
     // zero, so each result is the exact uniform average over 2048 selected tokens plus its open
     // causal tail.
-    constexpr int kPrefillTokens = 17;
     d_value.fill();
     d_index_key.fill();
     std::vector<float> prefill_input(static_cast<std::size_t>(kHidden) * kPrefillTokens, 0.0F);
@@ -306,6 +305,66 @@ int run() {
         from_device_bf16(d_prefill_destination.data(), prefill_expected.size()),
         prefill_expected, {/*absolute*/ 4.0e-4, /*relative*/ 4.0e-2});
     failures += d_prefill_destination.verify_guards("Flash-Next QSA prefill destination");
+    // Neighboring queries reuse overlapping, partly overlapping, and disjoint rows.
+    // Keep nonuniform represented K/V and an independent FP64 softmax oracle. Holes
+    // occupy complete tiles and the final valid entry sits after those holes.
+    d_k_pages.fill();
+    d_v_pages.fill();
+    store_bf16(d_query_gate, static_cast<std::size_t>(255) * kHidden, 2.0F);
+    store_bf16(d_query_norm, 255, 0.0F); // QSA RMSNorm uses (1 + weight).
+    for (int position = 0; position < 256; ++position) {
+        const auto base = static_cast<std::size_t>(kHeadDim) *
+            (position % 64 + 64 * 2 * (position / 64));
+        store_bf16(d_k_pages, base + 255, 0.125F * (position % 7 - 3));
+        store_bf16(d_v_pages, base, 0.125F * (position % 11 - 5));
+    }
+    const int active = kPrefillTokens - 1;
+    d_prefill_valid.copy_from_host(&active, sizeof(active));
+    for (int pattern = 0; pattern < 3; ++pattern) {
+        std::vector<int> selected(2051 * kPrefillTokens, -1);
+        std::vector<double> oracle(static_cast<std::size_t>(kHidden) * kPrefillTokens, 0.0);
+        for (int token = 0; token < active; ++token) {
+            double numerator = 0.0, denominator = 0.0;
+            const int shift = token % 2 * (pattern == 1 ? 4 : pattern == 2 ? 1 : 0);
+            for (int item = 0; item < 17; ++item) {
+                const int position = 4 * item + shift;
+                const int slot = item == 16 ? 2050 : item;
+                selected[2051 * token + slot] = position;
+                const double key = 0.125 * (position % 7 - 3);
+                const double value = 0.125 * (position % 11 - 5);
+                const double q = 1.0 / std::sqrt(1.0 / 256.0 + 1.0e-6);
+                const double probability = std::exp(q * key / 16.0);
+                numerator += probability * value;
+                denominator += probability;
+            }
+            oracle[static_cast<std::size_t>(token) * kHidden] =
+                numerator / denominator / (1.0 + std::exp(-1.0));
+        }
+        DeviceBuffer d_selected = to_device_i32(selected);
+        Tensor selected_tensor(d_selected.p, DType::I32, {2051, kPrefillTokens});
+        d_prefill_destination.fill();
+        prefill_workspace.reset();
+        ops::flash_next_qsa(
+            Tensor(d_prefill_input.p, DType::BF16, {kHidden, kPrefillTokens}),
+            Tensor(d_prefill_positions.p, DType::I32, {kPrefillTokens, 1}),
+            Tensor(d_prefill_rope.p, DType::I32, {kPrefillTokens, 1, 3}),
+            Tensor(d_prefill_valid.p, DType::I32, {1}), Tensor(d_rows.p, DType::I32, {1}),
+            weights, cache, {.min_visible_keys = kLongPosition + 1,
+                             .max_visible_keys = kLongPosition + kPrefillTokens},
+            prefill_destination, prefill_workspace, nullptr, nullptr,
+            {.reused_indices = &selected_tensor});
+        cuda_synchronize();
+        auto actual = from_device_bf16(d_prefill_destination.data(), oracle.size());
+        actual.resize(static_cast<std::size_t>(active) * kHidden);
+        oracle.resize(actual.size());
+        failures += verify_pointwise("QSA neighboring selections", actual, oracle,
+                                      {/*absolute*/ 4.0e-3, /*relative*/ 2.0e-2});
+        failures += d_prefill_destination.verify_guards("QSA neighboring output");
+        if (from_device<int>(d_selected, selected.size()) != selected) {
+            std::cerr << "QSA modified reused selections\n";
+            ++failures;
+        }
+    }
     return failures;
 }
 
@@ -314,7 +373,7 @@ int run() {
 int main() {
     if (ninfer::test::cuda_unavailable()) { return 77; }
     try {
-        const int failures = run();
+        const int failures = run(17) + run(18);
         std::cout << (failures == 0 ? "OK" : "FAIL") << " Flash-Next QSA\n";
         return failures == 0 ? 0 : 1;
     } catch (const std::exception& error) {
