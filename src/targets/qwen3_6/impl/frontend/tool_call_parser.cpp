@@ -673,6 +673,10 @@ std::string ToolCallOutputDecoder::feed(std::string_view text) {
     return visible;
 }
 
+std::size_t ToolCallOutputDecoder::tool_call_progress_bytes() const noexcept {
+    return saw_tool_marker_ ? tool_region_.size() : 0;
+}
+
 ToolCallOutputDecoder::Terminal ToolCallOutputDecoder::finish() {
     if (finished_) { throw std::logic_error("tool-call output decoder is already finished"); }
     finished_ = true;

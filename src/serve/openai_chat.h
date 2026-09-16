@@ -54,6 +54,7 @@ public:
     void note_timing(const ninfer::GenerationTimingObservation& timing);
     std::string reasoning_delta(const std::string& text);
     std::string content_delta(const std::string& text);
+    std::string tool_call_progress(std::size_t cumulative_bytes);
     std::vector<std::string> finish(const GenerationOutcome& outcome);
 
 private:

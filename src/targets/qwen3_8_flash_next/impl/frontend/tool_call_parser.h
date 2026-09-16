@@ -82,6 +82,7 @@ public:
 
     [[nodiscard]] std::string feed(std::string_view text);
     [[nodiscard]] Terminal finish();
+    [[nodiscard]] std::size_t tool_call_progress_bytes() const noexcept;
 
 private:
     std::shared_ptr<const ToolCallOutputContract> contract_;

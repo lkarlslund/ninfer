@@ -690,6 +690,10 @@ int test_stream_response() {
 
     OpenAIChatStream tool_stream(identity(), false);
     (void)tool_stream.start();
+    const Json tool_progress = parse_sse(tool_stream.tool_call_progress(1536));
+    failures += check(tool_progress["choices"][0]["delta"].empty() &&
+                          tool_progress["tool_call_progress"]["bytes"] == 1536,
+                      "stream reports withheld tool-call progress without exposing markup");
     GenerationOutcome tool_outcome;
     tool_outcome.tool_calls.push_back(ninfer::GeneratedToolCall{
         .name = "Edit", .arguments_json = R"({"file_path":"/tmp/probe.cpp"})"});

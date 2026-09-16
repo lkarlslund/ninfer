@@ -379,7 +379,7 @@ StopPolicy merge_stop_policy(const fi::Tokenizer& tokenizer, const StopPolicy& c
     const auto append_token   = [&](TokenId token) {
         if (!tokenizer.is_valid_token(token)) {
             throw std::invalid_argument("stop token id is outside the checkpoint vocabulary: " +
-                                          std::to_string(token));
+                                        std::to_string(token));
         }
         if (std::find(result.token_ids.begin(), result.token_ids.end(), token) ==
             result.token_ids.end()) {
@@ -1292,7 +1292,8 @@ PublishedOutput OutputSession::commit_preview() {
 
     for (OutputDelta& delta : output) {
         if (delta.channel == OutputChannel::Content) {
-            delta.text = impl_->tool_call_output.feed(delta.text);
+            delta.text                     = impl_->tool_call_output.feed(delta.text);
+            delta.tool_call_progress_bytes = impl_->tool_call_output.tool_call_progress_bytes();
         }
     }
     if (impl_->state.terminal) {

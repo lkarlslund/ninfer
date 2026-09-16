@@ -145,9 +145,9 @@ Json tool_calls_json(const std::vector<ToolCall>& calls, bool include_index) {
     Json output = Json::array();
     for (std::size_t index = 0; index < calls.size(); ++index) {
         const ToolCall& call = calls[index];
-        Json value           = {{"id", call.id},
-                                {"type", "function"},
-                                {"function", Json{{"name", call.name}, {"arguments", call.arguments_json}}}};
+        Json value = {{"id", call.id},
+                      {"type", "function"},
+                      {"function", Json{{"name", call.name}, {"arguments", call.arguments_json}}}};
         if (include_index) { value["index"] = static_cast<int>(index); }
         output.push_back(std::move(value));
     }
@@ -341,6 +341,17 @@ std::string OpenAIChatStream::content_delta(const std::string& text) {
     content_started_ = true;
     content_ += text;
     return chunk(identity_, Json{{"content", text}}, nullptr, include_usage_, live_timings_json());
+}
+
+std::string OpenAIChatStream::tool_call_progress(std::size_t cumulative_bytes) {
+    if (!started_ || finished_ || cumulative_bytes == 0) {
+        throw std::logic_error("invalid OpenAI Chat tool-call progress state");
+    }
+    Json payload                  = base_payload(identity_, "chat.completion.chunk");
+    payload["choices"]            = Json::array({stream_choice(Json::object())});
+    payload["tool_call_progress"] = Json{{"bytes", cumulative_bytes}};
+    if (include_usage_) { payload["usage"] = nullptr; }
+    return event(std::move(payload));
 }
 
 std::vector<std::string> OpenAIChatStream::finish(const GenerationOutcome& outcome) {

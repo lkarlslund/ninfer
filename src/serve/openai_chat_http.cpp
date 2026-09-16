@@ -179,6 +179,10 @@ void HttpServer::handle_chat_completions(const httplib::Request& req, httplib::R
                     output.on_reasoning = [&](const std::string& text) {
                         render_and_write(transport, [&] { return encoder->reasoning_delta(text); });
                     };
+                    output.on_tool_call_progress = [&](std::size_t bytes) {
+                        render_and_write(transport,
+                                         [&] { return encoder->tool_call_progress(bytes); });
+                    };
                     output.is_cancelled = [&] { return transport.poll(); };
 
                     outcome = service_->run(stream->prepared, &output);

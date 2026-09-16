@@ -1292,7 +1292,8 @@ PublishedOutput OutputSession::commit_preview() {
 
     for (OutputDelta& delta : output) {
         if (delta.channel == OutputChannel::Content) {
-            delta.text = impl_->tool_call_output.feed(delta.text);
+            delta.text                     = impl_->tool_call_output.feed(delta.text);
+            delta.tool_call_progress_bytes = impl_->tool_call_output.tool_call_progress_bytes();
         }
     }
     if (impl_->state.terminal) {

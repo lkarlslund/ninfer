@@ -560,6 +560,9 @@ enum class FinishReason : std::uint8_t {
 struct OutputDelta {
     OutputChannel channel = OutputChannel::Content;
     std::string text;
+    // Cumulative bytes withheld by the frontend while it validates a possible structured tool
+    // call. This lets protocol adapters report progress without leaking model-native markup.
+    std::size_t tool_call_progress_bytes = 0;
 };
 
 // Exact prompt accounting selected at admission. Streaming consumers receive this once before any

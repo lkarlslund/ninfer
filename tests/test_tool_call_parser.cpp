@@ -119,7 +119,7 @@ int test_basic_legacy_parsing() {
 int test_multiple_calls() {
     const std::string text = tool_call("first", {{"payload", "{\"ok\":true,\"items\":[1,2]}"}}) +
                              "\n" + tool_call("second", {{"value", "plain text"}});
-    const auto parsed = fi::parse_qwen_tool_call_output(text, 64, kLegacyContract);
+    const auto parsed      = fi::parse_qwen_tool_call_output(text, 64, kLegacyContract);
 
     int failures = 0;
     failures += check(parsed.is_tool_call_response && parsed.tool_calls.size() == 2,
@@ -461,6 +461,8 @@ int test_empty_declared_non_string_is_omitted() {
     fi::ToolCallOutputDecoder bytewise(contract, 128);
     std::string bytewise_visible;
     for (const char byte : text) { bytewise_visible += bytewise.feed(std::string_view(&byte, 1)); }
+    failures += check(bytewise.tool_call_progress_bytes() > 0,
+                      "incremental decoder did not expose withheld tool-call byte progress");
     auto bytewise_terminal = bytewise.finish();
     failures +=
         check(bytewise_visible == "I need one more check." && bytewise_terminal.content.empty() &&

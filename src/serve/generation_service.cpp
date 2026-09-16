@@ -216,6 +216,9 @@ public:
     }
 
     void publish(ninfer::OutputDelta delta) override {
+        if (delta.tool_call_progress_bytes != 0 && sink_->on_tool_call_progress) {
+            sink_->on_tool_call_progress(delta.tool_call_progress_bytes);
+        }
         if (delta.text.empty()) { return; }
         if (delta.channel == ninfer::OutputChannel::Reasoning) {
             if (sink_->on_reasoning) { sink_->on_reasoning(delta.text); }
