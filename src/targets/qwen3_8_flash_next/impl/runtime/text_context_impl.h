@@ -1004,8 +1004,17 @@ void TextContext::mtp_forward_decode_batch(
     ScopedValue<const Tensor*> valid_binding(active_valid_columns_, &valid_columns);
     ScopedValue<std::int32_t> batch_binding(active_sequence_batch_, batch);
     ScopedValue<std::int32_t> width_binding(active_sequence_width_, width);
+#ifdef NINFER_QWEN38_FLASH_NEXT
+    Tensor flat_hidden = hidden.view({4 * kCfg.hidden, width * batch});
+    Tensor flat_mtp_hidden = mtp_hidden.view({kCfg.hidden, width * batch});
+    Tensor flat_predictor_hidden =
+        predictor_hidden->view({4 * kCfg.hidden, width * batch});
+    mtp_forward_core(ids, flat_hidden, cache_positions, rope_positions, envelope, flat_mtp_hidden,
+                     nullptr, &flat_predictor_hidden, selected_qsa_indices, reused_qsa_indices);
+#else
     mtp_forward_core(ids, hidden, cache_positions, rope_positions, envelope, mtp_hidden, nullptr,
                      predictor_hidden, selected_qsa_indices, reused_qsa_indices);
+#endif
 }
 
 void TextContext::mtp_propose_batch(const Tensor& hidden, Tensor& logits, Tensor& draft_tokens) {
