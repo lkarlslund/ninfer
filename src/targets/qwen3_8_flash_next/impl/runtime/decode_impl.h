@@ -49,9 +49,15 @@ auto ordinary_batch_body(OrdinaryBatchContext& state, std::int32_t batch_size,
             }
         }
 
+        Tensor ple_embeddings;
+        const Tensor* active_ple_embeddings = nullptr;
+        if (state.ple_embeddings != nullptr) {
+            ple_embeddings = state.ple_embeddings->slice(2, 0, batch_size);
+            active_ple_embeddings = &ple_embeddings;
+        }
         card.ordinary_decode_batch(tokens, cache_positions, rope_positions, kv_rows, state_sources,
                                    state_destinations, envelope, hidden, logits,
-                                   state.ple_embeddings);
+                                   active_ple_embeddings);
         ops::scatter(hidden, state_destinations, state.continuation_hidden_store,
                      state.execution.device.stream);
         if (predictor_hidden.data != nullptr) {

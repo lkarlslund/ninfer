@@ -161,7 +161,11 @@ auto mtp_decode_batch_body(MtpBatchContext& state, std::int32_t batch_size, std:
         Tensor ar_valid_columns  = frame.ar_valid_columns.slice(0, 0, batch_size);
         Tensor next_drafts       = frame.next_drafts.slice(0, 0, batch_size);
 
-        card.set_ple_embeddings(state.ple_embeddings);
+        Tensor ple_embeddings;
+        if (state.ple_embeddings != nullptr) {
+            ple_embeddings = state.ple_embeddings->slice(2, 0, batch_size);
+            card.set_ple_embeddings(&ple_embeddings);
+        }
 
         ops::speculative_prepare_verify_inputs(anchors, current_drafts, frontiers, current_extents,
                                                verify_ids, target_positions,
