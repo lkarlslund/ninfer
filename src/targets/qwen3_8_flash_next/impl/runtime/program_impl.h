@@ -10920,10 +10920,11 @@ void ProgramImplCore::bind_sequence_kv(SequenceState& sequence) {
                     backend_kv_addresses->mapped_pages(*sequence.kv->backend), row);
             }
         }
-        set_device_i32(io.text_kv_table_row, text_kv_addresses->bound_row(sequence.kv->text));
-        set_device_i32(io.backend_kv_table_row,
-                       sequence.kv->backend ? backend_kv_addresses->bound_row(*sequence.kv->backend)
-                                            : 0);
+        // Per-sequence prefill uses an execution view containing exactly one block-table row.
+        // Its local row selector is therefore always zero; batched decode binds the shared
+        // table matrix and supplies global execution rows through its ingress tensors instead.
+        set_device_i32(io.text_kv_table_row, 0);
+        set_device_i32(io.backend_kv_table_row, 0);
     } catch (...) {
         if (!text_active) {
             if (sequence.kv->backend && backend_kv_addresses->active(*sequence.kv->backend)) {

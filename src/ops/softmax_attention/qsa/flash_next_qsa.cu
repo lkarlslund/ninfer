@@ -1832,6 +1832,7 @@ void flash_next_qsa(const Tensor& input, const Tensor& cache_positions,
                     static_cast<const int*>(table_rows.data), width, tokens, group_extent,
                     score_stride, static_cast<float*>(scores.data));
             }
+            CUDA_CHECK(cudaGetLastError());
             Tensor selected_groups = workspace.alloc(DType::I32, {kTopGroups, tokens});
             hierarchical_selection = tokens <= 16 && group_extent >= 8192;
             // Persistent-top-k collection order is part of the multi-token
