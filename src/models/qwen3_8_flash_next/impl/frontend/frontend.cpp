@@ -1010,7 +1010,8 @@ PreparedPrompt& PreparedPrompt::operator=(PreparedPrompt&&) noexcept = default;
 
 PromptSummary PreparedPrompt::summary() const {
     if (data_ == nullptr) { throw std::logic_error("prepared prompt is empty"); }
-    return PromptSummary{.prompt_tokens = checked_token_count(data_->token_ids.size()),
+    return PromptSummary{.starts_in_reasoning = data_->starts_in_reasoning,
+                         .prompt_tokens = checked_token_count(data_->token_ids.size()),
                          .has_media     = data_->has_media()};
 }
 
@@ -1493,7 +1494,8 @@ PreparedPrompt Frontend::prepare(PromptInput input, const PreparationControl& co
         cache_boundaries, result.vision_items, engine_tool_marker_index, leading_boundary,
         checked_token_count(result.token_ids.size()));
     result.starts_in_reasoning =
-        options.continuation == PromptContinuationMode::NewAssistantTurn && options.enable_thinking;
+        options.continuation == PromptContinuationMode::NewAssistantTurn &&
+        options.enable_thinking.value_or(true);
     result.prepare.seconds = std::chrono::duration<double>(Clock::now() - start).count();
     return PreparedPrompt(std::move(prepared));
 }

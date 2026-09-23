@@ -13,7 +13,7 @@ benchmark-report, and external protocol behavior. Repository verification princi
   components, resources, proposals and numerical conversion methods;
 - `models/qwen3_5/` — config/binding, frontend, state/context stores, workspace, MTP alignment and
   opt-in real Engine integration;
-- `models/qwen3_8_flash_next/` and `models/qwen3_8_flash_next_125b_a6b/` — PLE hashing, v3 selected residency and real Flash-Next Text/Vision/MTP/prefix/concurrent Engine checks;
+- `models/qwen3_8_flash_next/` and `models/qwen3_8_flash_next_125b_a6b/` — PLE hashing, thinking output channels, v3 selected residency and real Flash-Next Text/Vision/MTP/prefix/concurrent Engine checks;
 - `ops/` — semantic Op qualification with independent mathematical or state-transition oracles;
   Linear and fused Linear suites are separated by their supported weight/activation paths;
 - root C++ tests — core storage, runtime admission/resource policy, public API, serving protocols,
@@ -232,7 +232,7 @@ Flash-Next v3 checks use an explicit artifact:
 
 ```bash
 NINFER_QWEN38_FLASH_NEXT_WEIGHTS=out/v3/qwen3_8_flash_next_125b_a6b_nvfp4.ninfer \
-  ctest --test-dir build -R 'ninfer_qwen3_8_flash_next_(real|load_plan)_test' --output-on-failure
+  ctest --test-dir build -R 'ninfer_qwen3_8_flash_next_(real|load_plan|frontend)_test' --output-on-failure
 python3 -m pytest tests/convert/test_flash_next.py tests/artifact -q
 ```
 

@@ -85,6 +85,8 @@ connection when the downstream client disappears.
 Flash-Next uses the same serving routes with its v3 artifact. It supports Text/Vision, MTP,
 prefix reuse and one to eight active requests, retaining its registered template renderer.
 Custom `--chat-template` overrides are supported only by the Qwen3.5 family.
+Flash-Next defaults to thinking enabled; an explicit `enable_thinking: false` selects
+non-thinking sampling defaults and publishes its answer as content.
 
 While a Chat Completions tool call is buffered for parsing, SSE may include a
 `tool_call_progress` object with cumulative `bytes` and an empty `choices` array. This observation
