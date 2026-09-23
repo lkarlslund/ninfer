@@ -1,3 +1,5 @@
+#include "core/performance.h"
+
 #include "ninfer_bench_support.h"
 
 #include "ninfer/engine.h"
@@ -218,6 +220,7 @@ int main(int argc, char** argv) {
                 require_cuda(cudaProfilerStart(), "cudaProfilerStart");
             }
             for (int repetition = 0; repetition < options.repetitions; ++repetition) {
+                NINFER_PERF_SCOPE("ninfer.region/1|measured");
                 result.reps.push_back(run_repetition(engine, test, corpus));
             }
             if (options.profile_measured) {

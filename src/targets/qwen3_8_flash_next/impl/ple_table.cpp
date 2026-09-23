@@ -1,5 +1,7 @@
 #include "targets/qwen3_8_flash_next/impl/ple_table.h"
 
+#include "core/performance.h"
+
 #include <algorithm>
 #include <bit>
 #include <limits>
@@ -37,6 +39,8 @@ std::uint64_t product(std::int32_t token, std::uint64_t multiplier) noexcept {
 } // namespace
 
 void compute_ple_ids(std::span<const std::int32_t> tokens, std::span<PleIds> output) {
+    NINFER_PERF_SCOPE("ninfer.host/1|ple.hash");
+
     if (tokens.size() != output.size()) {
         throw std::invalid_argument("PLE token and output lengths must match");
     }
@@ -69,6 +73,8 @@ void compute_ple_ids(std::span<const std::int32_t> tokens, std::span<PleIds> out
 
 void gather_ple_fp8(std::span<const std::byte> table, std::span<const PleIds> ids,
                     std::span<std::byte> output) {
+    NINFER_PERF_SCOPE("ninfer.host/1|ple.gather");
+
     constexpr std::uint64_t table_bytes = kPleRows * kPleHeadWidth;
     if (table.size() != table_bytes) {
         throw std::invalid_argument("PLE table has the wrong byte length");

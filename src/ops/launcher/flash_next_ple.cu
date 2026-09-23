@@ -1,5 +1,7 @@
 #include "ninfer/ops/flash_next_ple.h"
 
+#include "ops/flash_next_work.h"
+
 #include "core/device.h"
 #include "ninfer/ops/linear.h"
 #include "ops/linear/nvfp4/nvfp4_codec.cuh"
@@ -307,6 +309,8 @@ void flash_next_ple(const Tensor& hyper, const Tensor& gathered_fp8,
                     const FlashNextPleWeights& weights, Tensor& conv_state,
                     Tensor& destination, WorkspaceArena& workspace, cudaStream_t stream,
                     Bf16GemmContext* bf16_gemm) {
+    NINFER_PERF_SCOPE("ple.prefill", hyper.ne[1], 1, 0, flash_next_work::ple(hyper.ne[1]));
+
     validate(hyper, gathered_fp8, weights, conv_state, destination);
     const int tokens = hyper.ne[1];
     auto scope = workspace.scope();
@@ -347,6 +351,8 @@ void flash_next_ple_batch_update(const Tensor& hyper, const Tensor& gathered_fp8
                                  std::int32_t batch, Tensor& destination,
                                  WorkspaceArena& workspace, cudaStream_t stream,
                                  Bf16GemmContext* bf16_gemm) {
+    NINFER_PERF_SCOPE("ple.update", hyper.ne[1], batch, 0, flash_next_work::ple(hyper.ne[1]));
+
     if (width <= 0 || batch <= 0 || batch > 8 || hyper.ne[1] != width * batch ||
         states.dtype != DType::BF16 || !states.is_contiguous() || states.ne[0] != kHyper ||
         states.ne[1] != kState || source_slots.dtype != DType::I32 ||
@@ -401,6 +407,8 @@ void flash_next_ple_replay_record(const Tensor& hyper, const Tensor& gathered_fp
                                   std::int32_t width, std::int32_t batch, Tensor& records,
                                   Tensor& destination, WorkspaceArena& workspace,
                                   cudaStream_t stream, Bf16GemmContext* bf16_gemm) {
+    NINFER_PERF_SCOPE("ple.record", hyper.ne[1], batch, 0, flash_next_work::ple(hyper.ne[1]));
+
     if (width <= 0 || batch <= 0 || batch > 8 || hyper.ne[1] != width * batch ||
         states.dtype != DType::BF16 || !states.is_contiguous() || states.ne[0] != kHyper ||
         states.ne[1] != kState || source_slots.dtype != DType::I32 ||

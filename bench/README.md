@@ -68,6 +68,11 @@ MTP is enabled with
 `--mtp-draft-tokens`; `--lm-head-draft` selects the optimized proposal head. CUDA Graph decode is
 enabled by default.
 
+Compile-time work annotations and offline Flash-Next GPU attribution are documented in
+[tools/bench/README.md](../tools/bench/README.md#flash-next-gpu-work-and-roofline-estimates).
+They require `NINFER_PERFORMANCE_TRACE=ON`; graph replay attribution also needs construction
+metadata, so use that workflow’s capture command.
+
 `--profile-measured` is a benchmark-only profiler boundary. It requires exactly one selected test
 and `-r 1`, synchronizes after warmup, and brackets only the measured repetition with
 `cudaProfilerStart/Stop`. Use it with an Nsight Systems `cudaProfilerApi` capture range so artifact

@@ -1,5 +1,7 @@
 #include "ninfer/ops/flash_next_qsa.h"
 
+#include "ops/flash_next_work.h"
+
 #include "core/device.h"
 #include "ninfer/ops/linear.h"
 #include "ninfer/ops/rmsnorm.h"
@@ -1549,6 +1551,10 @@ void flash_next_qsa(const Tensor& input, const Tensor& cache_positions,
                     WorkspaceArena& workspace, cudaStream_t stream,
                     Bf16GemmContext* bf16_gemm,
                     FlashNextQsaIndexControl index_control) {
+    NINFER_PERF_SCOPE(index_control.reused_indices != nullptr ? "qsa.reuse" : "qsa.select",
+                       input.ne[1], cache_positions.ne[1], envelope.max_visible_keys,
+                       flash_next_work::qsa(input.ne[1], index_control.reused_indices != nullptr));
+
     const int width = cache_positions.ne[0];
     const int batch = cache_positions.ne[1];
     const int tokens = width * batch;

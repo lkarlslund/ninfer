@@ -1,0 +1,9 @@
+{
+  "name": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition",
+  "reference": "NVIDIA RTX Blackwell PRO GPU Architecture v1.0, Appendix A, pp. 45–46; boost-clock dense rates, FP32 accumulation. https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/quadro-product-literature/NVIDIA-RTX-Blackwell-PRO-GPU-Architecture-v1.0.pdf",
+  "kind": "theoretical",
+  "dram_gbps": 1792.0,
+  "bf16_tflops": 503.8,
+  "nvfp4_tflops": 2015.2,
+  "fp32_tflops": 126.0
+}
