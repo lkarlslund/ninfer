@@ -18,17 +18,36 @@ from typing import Iterable, Iterator, Sequence
 
 import torch
 
-from tools.artifact.container import ArtifactIdentity, ArtifactWriter
-from tools.artifact.layouts import encode_direct, swizzle_nvfp4_scales
-from tools.convert.common.safetensors import ShardReader, TensorMetadata
-from tools.convert.common.quantize import pick_device
-from tools.convert.qwen3_6.common import conversion
-from tools.convert.qwen3_6.common import recipe as family_recipe
-from . import draft_head, inventory
+from tools.artifact.writer import ArtifactWriter
+from tools.artifact.reader import Artifact
+from tools.artifact.schema import ResourceSpec, plan_objects
+from tools.artifact.codecs.direct import encode_direct
+from tools.artifact.codecs.nvfp4 import swizzle_nvfp4_scales
+from tools.artifact.codecs.row_split import encode_row_split
+from tools.convert.sources.safetensors import SafetensorsSource, TensorInfo
+from tools.convert.quantization.groupwise import pick_device, quantize_matrix
+from . import draft_head, inventory, descriptor, vision
+
+
+def read_tensor(reader, name):
+    return reader.read_flat(name).reshape(reader.describe(name).shape)
+
+
+def encode_tensor_payload(value, spec, device):
+    if spec.layout == inventory.CONTIGUOUS:
+        return encode_direct(value.float() if spec.format == inventory.FP32 else value, spec.format)
+    quantized = quantize_matrix(value, spec.format, device=device)
+    return encode_row_split(quantized.codes, quantized.scales, spec.format, spec.shape)
+
+
+def check_members(label, values, expected):
+    for key, value in expected.items():
+        if values.get(key) != value:
+            raise ValueError(f"{label}.{key}: expected {value!r}, got {values.get(key)!r}")
 
 
 OUTPUT_BASENAME = "qwen3_8_flash_next_125b_a6b_nvfp4.ninfer"
-RECIPE_ID = "qwen3_8_flash_next_125b_a6b_nvfp4-v1"
+RECIPE_ID = "qwen3_8_flash_next_125b_a6b_nvfp4-v3"
 SOURCE_REPOSITORY = "RadixArk/Qwen3.8-Flash-Next-NVFP4"
 
 _PLE_PREFIX = (
@@ -45,9 +64,7 @@ _PLE_METADATA = frozenset(
 )
 _DRAFT_HEAD = "ninfer.optimized_proposal_head.weight"
 _DRAFT_HEAD_IDS = "ninfer.optimized_proposal_head.token_ids"
-_VISION_RECIPES = family_recipe.build_vision_recipes(2560)
-_VISION_BY_NAME = {item.object_name: item for item in _VISION_RECIPES}
-_VISION_SOURCES = family_recipe.source_requirements(_VISION_RECIPES)
+_VISION_BY_NAME = vision.SOURCES
 _CONVOLUTION_NAMES = frozenset(
     {
         *(f"model.language_model.layers.{layer}.linear_attn.conv1d.weight"
@@ -68,10 +85,6 @@ def _bank_name(layer: int, role: str) -> str:
     return f"model.language_model.layers.{layer}.mlp.experts.{role}"
 
 
-def _load_resources(model_dir: Path) -> tuple[conversion.ResourcePayload, ...]:
-    return conversion.load_resources(model_dir, inventory.RESOURCE_SPECS)
-
-
 def _direct_source_specs() -> tuple[inventory.TensorSpec, ...]:
     special = {
         _bank_name(layer, role)
@@ -86,19 +99,19 @@ def _direct_source_specs() -> tuple[inventory.TensorSpec, ...]:
     return tuple(
         spec
         for spec in inventory.TENSOR_SPECS
-        if spec.name not in special
-        and spec.name != _PLE_TABLE
-        and spec.name not in (_DRAFT_HEAD, _DRAFT_HEAD_IDS)
-        and spec.name not in _VISION_BY_NAME
+        if spec.id not in special
+        and spec.id != _PLE_TABLE
+        and spec.id not in (_DRAFT_HEAD, _DRAFT_HEAD_IDS)
+        and spec.id not in _VISION_BY_NAME
     )
 
 
 def _expected_source_signatures() -> dict[str, tuple[tuple[int, ...], str]]:
     expected = {
-        spec.name: (spec.shape, "BF16") for spec in _direct_source_specs()
+        spec.id: (spec.shape, "BF16") for spec in _direct_source_specs()
     }
     expected.update(
-        {name: (source.shape, source.dtype) for name, source in _VISION_SOURCES.items()}
+        vision.signatures()
     )
     for name in _CONVOLUTION_NAMES:
         expected[name] = ((10240, 1, 4), "BF16")
@@ -131,13 +144,13 @@ def _expected_source_signatures() -> dict[str, tuple[tuple[int, ...], str]]:
 
 
 def _validate_config(model_dir: Path) -> dict[str, object]:
-    config = conversion.load_json(model_dir / "config.json")
+    config = json.loads((model_dir / "config.json").read_text())
     text = config.get("text_config")
     vision = config.get("vision_config")
     quant = config.get("quantization_config")
     if not isinstance(text, dict) or not isinstance(vision, dict) or not isinstance(quant, dict):
         raise ValueError("checkpoint config is missing text, vision, or quantization config")
-    conversion.check_members(
+    check_members(
         "config",
         config,
         {
@@ -146,7 +159,7 @@ def _validate_config(model_dir: Path) -> dict[str, object]:
             "tie_word_embeddings": False,
         },
     )
-    conversion.check_members(
+    check_members(
         "text_config",
         text,
         {
@@ -170,7 +183,7 @@ def _validate_config(model_dir: Path) -> dict[str, object]:
             "mtp_num_hidden_layers": 1,
         },
     )
-    conversion.check_members(
+    check_members(
         "vision_config",
         vision,
         {
@@ -181,7 +194,7 @@ def _validate_config(model_dir: Path) -> dict[str, object]:
             "out_hidden_size": 2560,
         },
     )
-    conversion.check_members(
+    check_members(
         "quantization_config",
         quant,
         {"quant_method": "modelopt", "quant_algo": "NVFP4"},
@@ -197,10 +210,10 @@ def _validate_config(model_dir: Path) -> dict[str, object]:
 
 
 def _validate_source(
-    reader: ShardReader,
-) -> tuple[dict[str, TensorMetadata], dict[str, int]]:
+    reader: SafetensorsSource,
+) -> tuple[dict[str, TensorInfo], dict[str, int]]:
     expected = _expected_source_signatures()
-    actual_names = frozenset(reader.names)
+    actual_names = frozenset(reader.weight_map)
     expected_names = frozenset(expected)
     unexpected = actual_names - expected_names - _PLE_METADATA
     missing = expected_names - actual_names
@@ -208,7 +221,7 @@ def _validate_source(
         detail = sorted(unexpected)[0] if unexpected else sorted(missing)[0]
         kind = "unexpected" if unexpected else "missing"
         raise ValueError(f"checkpoint tensor allocation is not closed: {kind} {detail}")
-    metadata = reader.metadata(expected_names)
+    metadata = {name: reader.describe(name) for name in expected_names}
     counts: Counter[str] = Counter()
     for name, signature in expected.items():
         item = metadata[name]
@@ -233,22 +246,22 @@ def _positive_reciprocal(value: torch.Tensor, name: str) -> torch.Tensor:
 
 
 def _matching_pair(
-    reader: ShardReader,
+    reader: SafetensorsSource,
     layer: int,
     expert: int,
     field: str,
 ) -> torch.Tensor:
     gate_name = _expert_source(layer, expert, "gate_proj", field)
     up_name = _expert_source(layer, expert, "up_proj", field)
-    gate = reader.get(gate_name).detach().contiguous().cpu()
-    up = reader.get(up_name).detach().contiguous().cpu()
+    gate = read_tensor(reader, gate_name).detach().contiguous().cpu()
+    up = read_tensor(reader, up_name).detach().contiguous().cpu()
     if gate.dtype != up.dtype or gate.shape != up.shape or not torch.equal(gate, up):
         raise ValueError(f"layer {layer} expert {expert}: gate/up {field} words differ")
     return gate
 
 
 def _expert_bank_payload(
-    reader: ShardReader,
+    reader: SafetensorsSource,
     layer: int,
     role: str,
 ) -> Iterator[bytes]:
@@ -259,7 +272,7 @@ def _expert_bank_payload(
 
     for expert in range(inventory.EXPERTS):
         pieces = [
-            reader.get(_expert_source(layer, expert, projection, "weight"))
+            read_tensor(reader, _expert_source(layer, expert, projection, "weight"))
             for projection in projections
         ]
         if any(piece.dtype != torch.uint8 for piece in pieces):
@@ -271,7 +284,7 @@ def _expert_bank_payload(
 
     for expert in range(inventory.EXPERTS):
         pieces = [
-            reader.get(_expert_source(layer, expert, projection, "weight_scale"))
+            read_tensor(reader, _expert_source(layer, expert, projection, "weight_scale"))
             for projection in projections
         ]
         if any(piece.dtype != torch.float8_e4m3fn for piece in pieces):
@@ -288,27 +301,27 @@ def _expert_bank_payload(
             name = _expert_source(layer, expert, "gate_proj", "weight_scale_2")
         else:
             name = _expert_source(layer, expert, "down_proj", "weight_scale_2")
-            scale = reader.get(name)
+            scale = read_tensor(reader, name)
         divisors[expert] = _positive_reciprocal(scale, name)
     yield encode_direct(divisors, inventory.FP32)
 
 
-def _input_divisors(reader: ShardReader, layer: int, role: str) -> bytes:
+def _input_divisors(reader: SafetensorsSource, layer: int, role: str) -> bytes:
     projection = "gate_proj" if role == "gate_up" else "down_proj"
     values = torch.empty(inventory.EXPERTS, dtype=torch.float32)
     for expert in range(inventory.EXPERTS):
         if role == "gate_up":
             scale = _matching_pair(reader, layer, expert, "input_scale")
         else:
-            scale = reader.get(_expert_source(layer, expert, projection, "input_scale"))
+            scale = read_tensor(reader, _expert_source(layer, expert, projection, "input_scale"))
         name = _expert_source(layer, expert, projection, "input_scale")
         values[expert] = _positive_reciprocal(scale, name)
     return encode_direct(values, inventory.FP32)
 
 
-def _ple_payload(reader: ShardReader) -> Iterator[bytes]:
+def _ple_payload(reader: SafetensorsSource) -> Iterator[bytes]:
     for name in _PLE_SHARDS:
-        tensor = reader.get(name)
+        tensor = read_tensor(reader, name)
         if tensor.dtype != torch.float8_e4m3fn or tuple(tensor.shape) != (2_500_012, 160):
             raise ValueError(f"{name}: PLE shard signature mismatch")
         yield encode_direct(tensor, inventory.FP8)
@@ -316,36 +329,36 @@ def _ple_payload(reader: ShardReader) -> Iterator[bytes]:
 
 def _payload(
     spec: inventory.TensorSpec,
-    reader: ShardReader,
+    reader: SafetensorsSource,
     device: torch.device,
     draft: draft_head.DraftHeadContext,
 ) -> bytes | Iterable[bytes]:
-    if spec.name == _DRAFT_HEAD_IDS:
+    if spec.id == _DRAFT_HEAD_IDS:
         return encode_direct(draft_head.materialize_draft_head_token_ids(draft), inventory.I32)
-    if spec.name == _DRAFT_HEAD:
-        full_head = reader.get("lm_head.weight")
+    if spec.id == _DRAFT_HEAD:
+        full_head = read_tensor(reader, "lm_head.weight")
         selected = draft_head.materialize_draft_head(full_head, draft)
-        return conversion.encode_tensor_payload(selected, spec, device)
-    if spec.name == _PLE_TABLE:
+        return encode_tensor_payload(selected, spec, device)
+    if spec.id == _PLE_TABLE:
         return _ple_payload(reader)
     for layer in inventory.LAYERS:
         prefix = _bank_name(layer, "")
-        if spec.name == prefix + "gate_up":
+        if spec.id == prefix + "gate_up":
             return _expert_bank_payload(reader, layer, "gate_up")
-        if spec.name == prefix + "down":
+        if spec.id == prefix + "down":
             return _expert_bank_payload(reader, layer, "down")
-        if spec.name == prefix + "gate_up_input_divisors":
+        if spec.id == prefix + "gate_up_input_divisors":
             return _input_divisors(reader, layer, "gate_up")
-        if spec.name == prefix + "down_input_divisors":
+        if spec.id == prefix + "down_input_divisors":
             return _input_divisors(reader, layer, "down")
-    if spec.name in _VISION_BY_NAME:
-        tensor = family_recipe.materialize_recipe(_VISION_BY_NAME[spec.name], reader)
-        return conversion.encode_tensor_payload(tensor, spec, device)
-    tensor = reader.get(spec.name)
-    expected_shape = (10240, 1, 4) if spec.name in _CONVOLUTION_NAMES else spec.shape
+    if spec.id in _VISION_BY_NAME:
+        value = read_tensor(reader, _VISION_BY_NAME[spec.id]).reshape(spec.shape)
+        return encode_tensor_payload(value, spec, device)
+    tensor = read_tensor(reader, spec.id)
+    expected_shape = (10240, 1, 4) if spec.id in _CONVOLUTION_NAMES else spec.shape
     if tuple(tensor.shape) != expected_shape or tensor.dtype != torch.bfloat16:
-        raise ValueError(f"{spec.name}: direct source signature mismatch")
-    if spec.name in _CONVOLUTION_NAMES:
+        raise ValueError(f"{spec.id}: direct source signature mismatch")
+    if spec.id in _CONVOLUTION_NAMES:
         tensor = tensor[:, 0, :].transpose(0, 1).contiguous()
     if spec.format == inventory.FP32:
         return encode_direct(tensor.float(), inventory.FP32)
@@ -365,33 +378,37 @@ def convert(
     started = time.perf_counter()
     resolved_device = pick_device(device)
     config_summary = _validate_config(source)
-    resources = _load_resources(source)
-    resource_map = {item.name: item.data for item in resources}
-    object_plan = conversion.build_object_plan(inventory.OBJECT_SPECS, resource_map)
+    resource_map = {name: (source / name.removeprefix("frontend/")).read_bytes()
+                    for name in inventory.RESOURCE_SPECS}
+    specs = [ResourceSpec(name, len(data)) for name, data in resource_map.items()] + list(inventory.TENSOR_SPECS)
+    objects = plan_objects(specs)
+    description = descriptor.describe([o.to_json() for o in objects])
 
-    with ShardReader(source) as reader:
+    with SafetensorsSource(source) as reader:
         _, dtype_counts = _validate_source(reader)
         draft = draft_head.compute_shortlist(
             Path(__file__).resolve().parents[3] / draft_head.DEFAULT_RANKING,
             source,
-            reader.get("lm_head.weight"),
+            read_tensor(reader, "lm_head.weight"),
             n=147_456,
         )
         output.parent.mkdir(parents=True, exist_ok=True)
         with ArtifactWriter(
             output,
-            ArtifactIdentity(inventory.MODEL_ID, inventory.WEIGHTS_ID),
-            object_plan.specs,
+            specs, **description, metadata={"name": inventory.MODEL_ID},
+            provenance={"source": SOURCE_REPOSITORY, "recipe": RECIPE_ID},
         ) as writer:
             for index, spec in enumerate(inventory.OBJECT_SPECS, start=1):
                 payload = (
-                    resource_map[spec.name]
-                    if isinstance(spec, inventory.ResourceSpec)
+                    resource_map[spec]
+                    if isinstance(spec, str)
                     else _payload(spec, reader, resolved_device, draft)
                 )
-                writer.write(spec.name, payload)
-                print(f"[{index}/{len(inventory.OBJECT_SPECS)}] {spec.name}", flush=True)
+                writer.write_object(spec if isinstance(spec, str) else spec.id, payload)
+                print(f"[{index}/{len(inventory.OBJECT_SPECS)}] {spec if isinstance(spec, str) else spec.id}", flush=True)
 
+    with Artifact(output) as artifact:
+        file_bytes = artifact.file_bytes
     elapsed = time.perf_counter() - started
     report = {
         "identity": {"model_id": inventory.MODEL_ID, "weights_id": inventory.WEIGHTS_ID},
@@ -401,8 +418,8 @@ def convert(
         "output": str(output.resolve()),
         "config_summary": config_summary,
         "source_dtype_counts": dtype_counts,
-        "objects": conversion.object_statistics(object_plan.objects),
-        "file_bytes": output.stat().st_size,
+        "objects": {"count": len(objects), "payload_bytes": sum(o.bytes for o in objects)},
+        "file_bytes": file_bytes,
         "elapsed_seconds": elapsed,
         "conversion_device": str(resolved_device),
         "ple_materialization": "file-backed-read-only",
@@ -410,7 +427,7 @@ def convert(
     }
     report_path = Path(str(output) + ".conversion.json")
     report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-    print(f"complete: {output.stat().st_size} bytes in {elapsed:.1f}s", flush=True)
+    print(f"complete: {file_bytes} bytes in {elapsed:.1f}s", flush=True)
     return report_path
 
 

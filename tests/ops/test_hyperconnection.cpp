@@ -28,7 +28,7 @@ Weight bf16_weight(const DeviceBuffer& storage, int rows, int columns) {
     Weight out{};
     out.payload = storage.p;
     out.payload_bytes = storage.bytes;
-    out.qtype = QType::BF16_CTRL;
+    out.qtype = QType::BF16;
     out.qdata = storage.p;
     out.n = rows;
     out.k = columns;

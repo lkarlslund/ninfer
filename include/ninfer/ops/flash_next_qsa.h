@@ -1,4 +1,5 @@
 #pragma once
+#include "core/weight.h"
 
 #include "core/arena.h"
 #include "core/paged_kv_cache.h"

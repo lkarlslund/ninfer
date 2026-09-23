@@ -1,4 +1,5 @@
 #pragma once
+#include "core/weight.h"
 
 // ninfer::ops::detail - private launch prototype for argmax.
 

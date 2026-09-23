@@ -373,11 +373,11 @@ def main() -> None:
         hardware = Hardware(**json.loads(args.hardware.read_text()))
         benchmark = json.loads(args.benchmark.read_text())
         if (benchmark.get("artifact_type") != "ninfer_bench_report" or
-                benchmark.get("schema_version") != 13 or
-                benchmark.get("load", {}).get("target") != "qwen3_8_flash_next_125b_a6b" or
-                benchmark.get("load", {}).get("weights_id") != "nvfp4" or
+                benchmark.get("schema_version") != 15 or
+                benchmark.get("load", {}).get("architecture") != "Qwen3_8FlashNextForCausalLM" or
+                "nvfp4" not in benchmark.get("load", {}).get("formats", []) or
                 len(benchmark.get("tests", [])) != 1):
-            raise ValueError("benchmark must contain one registered Flash-Next NVFP4 test")
+            raise ValueError("benchmark must contain one v3 Flash-Next NVFP4 benchmark test")
         if hardware.name != benchmark.get("environment", {}).get("gpu_name"):
             raise ValueError("hardware profile name does not match benchmark GPU")
         report = read_report(args.trace, hardware, args.sample)

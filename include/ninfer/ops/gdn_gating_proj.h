@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/weight.h"
 #include "core/arena.h"
 #include "core/device.h"
 #include "core/tensor.h"
@@ -33,7 +34,7 @@ namespace ninfer::ops {
  *   g[h,t]    = -exp(A_log[h]) * softplus(a[h,t] + dt_bias[h])
  *   beta[h,t] = sigmoid(b[h,t]).
  *
- * `x` is contiguous BF16 [5120,T]; both weights are contiguous BF16_CTRL [48,5120]; A_log and
+ * `x` is contiguous BF16 [5120,T]; both weights are contiguous BF16 [48,5120]; A_log and
  * dt_bias are contiguous FP32 [48]; g and beta are distinct contiguous FP32 [48,T]. The numerical
  * contract accepts every positive T. The oracle evaluates the logical formula naively in FP64
  * from the represented inputs. Projection staging, accumulator precision, and any private
@@ -51,8 +52,8 @@ void gdn_gating_proj(const Tensor& x, const Weight& a_weight, const Weight& b_we
 /**
  * Registered contiguous-parent storage forms of gdn_gating_proj:
  *
- * - Qwen3.8-27B: BF16_CTRL `ab_weight [96,5120]`, with A in rows [0,48) and B in [48,96);
- * - Qwen3.6-35B-A3B: BF16_CTRL `ab_weight [64,2048]`, with A in rows [0,32) and B in [32,64).
+ * - Qwen3.8-27B: BF16 `ab_weight [96,5120]`, with A in rows [0,48) and B in [48,96);
+ * - Qwen3.6-35B-A3B: BF16 `ab_weight [64,2048]`, with A in rows [0,32) and B in [32,64).
  *
  * The complete immutable parent is the public weight. Its halves are consumed as zero-copy views
  * and produce FP32 g/beta `[heads,T]` under the same logical formula and oracle. All other effects
@@ -78,7 +79,9 @@ void gdn_gating_proj(const Tensor& x, const Weight& ab_weight, const Tensor& A_l
  * through h. Private tensor-core operand staging remains an implementation choice. The tensor and
  * weight domains otherwise match the two-weight gdn_gating_proj form. The implementation may fuse
  * or compose its internal kernels for any positive T; that route is not observable at this
- * boundary.
+ * boundary. A contiguous [hidden,W,B] block is presented as the matrix with T=W*B; each
+ * column has its own norm and controls. DFlash2 target verification uses W=2..16, B=1..8
+ * (T<=128), without restricting the positive-T matrix contract.
  */
 void gdn_norm_gating_proj(const Tensor& x, const Tensor& norm_weight, float eps,
                           const Weight& a_weight, const Weight& b_weight, const Tensor& A_log,

@@ -1,8 +1,9 @@
 # Perplexity evaluation
 
-`ninfer-perplexity` measures the causal perplexity produced by a registered `.ninfer` artifact.
+`ninfer-perplexity` measures the causal perplexity produced by a v3 `.ninfer` artifact.
 It uses the artifact's tokenizer, Text model, selected Main KV representation, final normalization,
 and main output head. It is an offline evaluator, not a serving endpoint or a logits-export API.
+Only Text weights and resources are loaded; Vision and speculative components are not required.
 
 ## Run the fixed corpus
 
@@ -70,10 +71,5 @@ are runtime results from the current artifact tokenizer and are recorded in each
 contain unrounded NLL/PPL values for every window, stream, domain, and the token-weighted overall
 aggregate.
 
-For fixed-token comparisons with another runtime, add `--token-scores`. This writes
-`token_scores.jsonl` with each stream/window, absolute token position, token ID, and natural-log
-probability. The report also retains each window's exact input IDs. This opt-in export does not
-change scoring or aggregate perplexity. `tools/bench/compare_flash_next_scores.py` compares that
-report against vLLM prompt scores, optionally caching responses with `--responses` so the two
-engines can run sequentially on one GPU. Cross-engine disagreement is diagnostic evidence, not
-an automatic correctness verdict.
+The schema-v2 report identifies the artifact's architecture, public name, actual weight formats
+and prefill signature alongside the workload and numerical results.

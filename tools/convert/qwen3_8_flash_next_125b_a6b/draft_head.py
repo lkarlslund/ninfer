@@ -7,13 +7,86 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from tools.convert.qwen3_6.common.draft_head import (
-    DraftHeadContext,
-    load_total_counts,
-    materialize_draft_head,
-    materialize_draft_head_token_ids,
-    read_special_ids,
-)
+import json
+from dataclasses import dataclass
+
+@dataclass(frozen=True, slots=True)
+class DraftHeadContext:
+    """Cached ordered shortlist shared by both derived artifact objects."""
+
+    n: int
+    selected: np.ndarray
+    ranking: Path
+    tokenizer: Path
+    force_include: tuple[int, ...]
+
+
+def load_total_counts(path: str | Path, vocab: int) -> np.ndarray:
+    """Load only the total-frequency row from a ``[rows,vocab]`` I64 ranking."""
+
+    ranking = Path(path)
+    word_bytes = np.dtype("<i8").itemsize
+    file_bytes = ranking.stat().st_size
+    row_bytes = vocab * word_bytes
+    if file_bytes == 0 or file_bytes % row_bytes:
+        raise ValueError(
+            f"ranking size {file_bytes} is not a positive multiple of {row_bytes}"
+        )
+    total = np.fromfile(ranking, dtype="<i8", count=vocab)
+    if total.size != vocab:
+        raise ValueError(f"ranking total row has {total.size} entries, expected {vocab}")
+    return total
+
+
+def read_special_ids(tokenizer_dir: str | Path) -> tuple[int, ...]:
+    """Return sorted special IDs from ``added_tokens_decoder``."""
+
+    config_path = Path(tokenizer_dir) / "tokenizer_config.json"
+    if not config_path.is_file():
+        return ()
+    with config_path.open(encoding="utf-8") as handle:
+        config = json.load(handle)
+    return tuple(
+        sorted(
+            {
+                int(token_id)
+                for token_id, metadata in config.get(
+                    "added_tokens_decoder", {}
+                ).items()
+                if isinstance(metadata, dict) and metadata.get("special", False)
+            }
+        )
+    )
+
+
+def _selected(context: DraftHeadContext) -> np.ndarray:
+    selected = np.asarray(context.selected, dtype=np.int64)
+    if selected.ndim != 1 or selected.size != context.n:
+        raise ValueError("draft-head context has an inconsistent shortlist")
+    return np.ascontiguousarray(selected)
+
+
+def materialize_draft_head_token_ids(context: DraftHeadContext) -> torch.Tensor:
+    """Materialize ``text/draft_head_token_ids`` as contiguous I32 words."""
+
+    return torch.from_numpy(_selected(context)).to(torch.int32)
+
+
+def materialize_draft_head(
+    lm_head: torch.Tensor,
+    context: DraftHeadContext,
+) -> torch.Tensor:
+    """Select full-head rows in exactly the persistent ID-map order."""
+
+    if lm_head.dim() != 2:
+        raise ValueError(f"lm_head.weight must be rank two, got {tuple(lm_head.shape)}")
+    selected = _selected(context)
+    if selected.size and int(selected.max()) >= lm_head.shape[0]:
+        raise ValueError("draft shortlist exceeds lm_head.weight rows")
+    indices = torch.from_numpy(selected)
+    if lm_head.device.type != "cpu":
+        indices = indices.to(lm_head.device)
+    return lm_head.index_select(0, indices)
 
 
 VOCAB_SIZE = 248_320

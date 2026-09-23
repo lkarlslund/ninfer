@@ -129,9 +129,9 @@ class PerformanceReportTest(unittest.TestCase):
         hardware = directory / "hardware.json"
         hardware.write_text(json.dumps(HARDWARE.__dict__))
         benchmark = directory / "benchmark.json"
-        metadata = {"artifact_type": "ninfer_bench_report", "schema_version": 13,
+        metadata = {"artifact_type": "ninfer_bench_report", "schema_version": 15,
                     "environment": {"gpu_name": "fixture"},
-                    "load": {"target": "qwen3_8_flash_next_125b_a6b", "weights_id": "nvfp4"},
+                    "load": {"architecture": "Qwen3_8FlashNextForCausalLM", "formats": ["bf16", "nvfp4"]},
                     "tests": [{"decode_output_tok_s_mean": 123, "requested_output_tokens": 33}]}
         benchmark.write_text(json.dumps(metadata))
         output = directory / "result.json"

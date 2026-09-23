@@ -2,27 +2,22 @@
 
 from __future__ import annotations
 
-from tools.convert.qwen3_6.common.inventory import (
-    ResourceSpec,
-    StoredObjectSpec,
-    TensorSpec,
-    build_vision_specs,
-)
+from tools.artifact.schema import TensorSpec
 
 
 MODEL_ID = "qwen3.8-flash-next-125b-a6b"
 WEIGHTS_ID = "nvfp4"
 TARGET_KEY = "qwen3_8_flash_next_125b_a6b"
 
-BF16 = "BF16"
-FP32 = "FP32"
-FP8 = "FP8_E4M3FN"
-NVFP4 = "NVFP4"
-Q4 = "Q4G64_F16S"
-I32 = "I32"
-CONTIGUOUS = "contiguous-le-v1"
-ROW_SPLIT = "row-split-k128-v1"
-EXPERT_NVFP4 = "expert-blockscale-k16-m128x4-v1"
+BF16 = "bf16"
+FP32 = "fp32"
+FP8 = "fp8_e4m3fn"
+NVFP4 = "nvfp4"
+Q4 = "q4_g64_fp16"
+I32 = "int32"
+CONTIGUOUS = "contiguous_le_v1"
+ROW_SPLIT = "row_split_k128_v1"
+EXPERT_NVFP4 = "expert_block_scale_k16_m128x4_v1"
 
 LAYERS = tuple(range(48))
 FULL_ATTENTION_LAYERS = tuple(range(3, 48, 4))
@@ -30,7 +25,7 @@ GDN_LAYERS = tuple(layer for layer in LAYERS if layer not in FULL_ATTENTION_LAYE
 EXPERTS = 512
 
 RESOURCE_SPECS = tuple(
-    ResourceSpec(name)
+    name
     for name in (
         "frontend/tokenizer.json",
         "frontend/tokenizer_config.json",
@@ -182,11 +177,59 @@ def _mtp_specs() -> tuple[TensorSpec, ...]:
     return tuple(specs)
 
 
+Q5 = "q5_g64_fp16"
+Q6 = "q6_g64_fp16"
+W8 = "q8_g32_fp16"
+
+def vision_tensor(name, shape, format):
+    return TensorSpec(name, shape, format, CONTIGUOUS if format == BF16 else ROW_SPLIT)
+
+def build_vision_specs(text_width: int) -> tuple[TensorSpec, ...]:
+    """Build the Flash-Next Vision inventory."""
+
+    specs: list[TensorSpec] = [
+        vision_tensor("vision/patch_embedding", (1152, 1536), Q6),
+        vision_tensor("vision/patch_embedding_bias", (1152,), BF16),
+        vision_tensor("vision/position_embedding", (2304, 1152), BF16),
+    ]
+
+    for layer in range(27):
+        prefix = f"vision/layers/{layer}/"
+        specs.extend(
+            (
+                vision_tensor(prefix + "attention/qkv", (3456, 1152), Q4),
+                vision_tensor(prefix + "attention/qkv_bias", (3456,), BF16),
+                vision_tensor(prefix + "attention/output", (1152, 1152), Q5),
+                vision_tensor(prefix + "attention/output_bias", (1152,), BF16),
+                vision_tensor(prefix + "mlp/fc1", (4304, 1152), Q4),
+                vision_tensor(prefix + "mlp/fc1_bias", (4304,), BF16),
+                vision_tensor(prefix + "mlp/fc2", (1152, 4304), Q5),
+                vision_tensor(prefix + "mlp/fc2_bias", (1152,), BF16),
+                vision_tensor(prefix + "norm1/weight", (1152,), BF16),
+                vision_tensor(prefix + "norm1/bias", (1152,), BF16),
+                vision_tensor(prefix + "norm2/weight", (1152,), BF16),
+                vision_tensor(prefix + "norm2/bias", (1152,), BF16),
+            )
+        )
+
+    specs.extend(
+        (
+            vision_tensor("vision/merger/fc1", (4608, 4608), W8),
+            vision_tensor("vision/merger/fc1_bias", (4608,), BF16),
+            vision_tensor("vision/merger/fc2", (text_width, 4608), W8),
+            vision_tensor("vision/merger/fc2_bias", (text_width,), BF16),
+            vision_tensor("vision/merger/norm/weight", (1152,), BF16),
+            vision_tensor("vision/merger/norm/bias", (1152,), BF16),
+        )
+    )
+    return tuple(specs)
+
+
 TEXT_TENSOR_SPECS = _text_specs()
 MTP_TENSOR_SPECS = _mtp_specs()
 VISION_TENSOR_SPECS = build_vision_specs(2560)
 TENSOR_SPECS = TEXT_TENSOR_SPECS + MTP_TENSOR_SPECS + VISION_TENSOR_SPECS
-OBJECT_SPECS: tuple[StoredObjectSpec, ...] = RESOURCE_SPECS + TENSOR_SPECS
+OBJECT_SPECS: tuple[str | TensorSpec, ...] = RESOURCE_SPECS + TENSOR_SPECS
 
 
 __all__ = [

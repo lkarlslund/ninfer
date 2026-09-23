@@ -131,7 +131,7 @@ __global__ void conv_replay_record_kernel(
 }
 
 void require_weight(const Weight& weight, int rows, int columns, const char* label) {
-    if (weight.qtype != QType::BF16_CTRL || weight.layout != QuantLayout::Contiguous ||
+    if (weight.qtype != QType::BF16 || weight.layout != QuantLayout::Contiguous ||
         weight.qdata == nullptr || weight.n != rows || weight.k != columns) {
         throw std::invalid_argument(label);
     }

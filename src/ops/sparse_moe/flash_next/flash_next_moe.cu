@@ -7,7 +7,7 @@
 #include "ninfer/ops/silu_mul.h"
 #include "ops/linear/bf16/bf16_config.h"
 #include "ops/linear/bf16/bf16_gemm_mma.cuh"
-#include "ops/linear/bf16/bf16_launch.h"
+#include "ops/linear/bf16/flash_next/bf16_launch.h"
 #include "ops/linear/nvfp4/nvfp4_codec.cuh"
 #include "ops/linear/nvfp4/nvfp4_config.h"
 #include "ops/linear/nvfp4/nvfp4_w4a4_mma.cuh"
@@ -34,8 +34,8 @@ constexpr int kGroupedTokenTile       = 32;
 constexpr int kLargeGroupedTokenTile  = 128;
 constexpr int kDecodeGroupedTokenTile = 16;
 
-using GroupedGateGeometry = detail::Nvfp4GemvGeometry<2 * kIntermediate, kHidden>;
-using GroupedDownGeometry = detail::Nvfp4GemvGeometry<kHidden, kIntermediate>;
+using GroupedGateGeometry = detail::Nvfp4Geometry<2 * kIntermediate, kHidden>;
+using GroupedDownGeometry = detail::Nvfp4Geometry<kHidden, kIntermediate>;
 using GroupedGateSchedule = detail::Nvfp4W4a4MmaSchedule<kGroupedTokenTile, 256, 128, 2, 4, 2, 1>;
 using GroupedDownSchedule = detail::Nvfp4W4a4MmaSchedule<kGroupedTokenTile, 256, 128, 2, 4, 2, 1>;
 using LargeGroupedSchedule =
@@ -47,8 +47,8 @@ using DecodeGroupedGateSchedule =
 using Bf16GroupedSchedule = detail::Bf16MmaSchedule<64, 64, 64, 32, 32, 3, 2, Cache::cg, Cache::cg,
                                                     detail::Bf16MmaFragmentPipeline::PingPong,
                                                     detail::Bf16MmaRaster::TokenFast>;
-using Bf16GroupedGateGeometry = detail::Bf16GemvGeometry<2 * kIntermediate, kHidden>;
-using Bf16GroupedDownGeometry = detail::Bf16GemvGeometry<kHidden, kIntermediate>;
+using Bf16GroupedGateGeometry = detail::Bf16Geometry<2 * kIntermediate, kHidden>;
+using Bf16GroupedDownGeometry = detail::Bf16Geometry<kHidden, kIntermediate>;
 
 __global__ void route_kernel(const __nv_bfloat16* scores, const __nv_bfloat16* input,
                              const __nv_bfloat16* shared_scale_weight, int* ids, float* alpha,
@@ -620,7 +620,7 @@ routed_down_kernel(const __nv_bfloat16* activations, const int* ids, const float
 
 void require_bank(const FlashNextExpertBank& bank, int rows, int columns, const char* label) {
     const bool nvfp4 = bank.qtype == QType::NVFP4;
-    const bool bf16  = bank.qtype == QType::BF16_CTRL;
+    const bool bf16  = bank.qtype == QType::BF16;
     if (bank.codes == nullptr || (!nvfp4 && !bf16) ||
         (nvfp4 && (bank.scales == nullptr || bank.weight_scale_divisors == nullptr ||
                    bank.input_scale_divisors == nullptr)) ||
@@ -757,7 +757,7 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
         static_cast<float*>(alpha.data), static_cast<float*>(shared_alpha.data), tokens);
     Tensor shared_activation = workspace.alloc(DType::BF16, {kIntermediate, tokens});
     if (tokens == 1) {
-        detail::launch_bf16_shared_swiglu_decode(input, weights.shared_gate, weights.shared_up,
+        detail::flash_next::launch_bf16_shared_swiglu_decode(input, weights.shared_gate, weights.shared_up,
                                                  shared_activation, stream);
     } else {
         Tensor shared_gate = workspace.alloc(DType::BF16, {kIntermediate, tokens});
@@ -914,7 +914,7 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
         CUDA_CHECK(cudaGetLastError());
         return;
     }
-    if (weights.routed_gate_up.qtype == QType::BF16_CTRL && tokens > 16) {
+    if (weights.routed_gate_up.qtype == QType::BF16 && tokens > 16) {
         const int assignments = tokens * kTop;
         Tensor local_rank     = workspace.alloc(DType::I32, {assignments});
         Tensor counts         = workspace.alloc(DType::I32, {kExperts});
@@ -970,7 +970,7 @@ void flash_next_moe(const Tensor& input, const FlashNextMoeWeights& weights, Ten
 
     const dim3 gate_grid((kIntermediate + kWarps - 1) / kWarps, kTop, tokens);
     const dim3 down_grid((kHidden + kWarps - 1) / kWarps, tokens);
-    if (weights.routed_gate_up.qtype == QType::BF16_CTRL) {
+    if (weights.routed_gate_up.qtype == QType::BF16) {
         routed_gate_up_kernel<true><<<gate_grid, kWarps * 32, 0, stream>>>(
             static_cast<const __nv_bfloat16*>(input.data), static_cast<const int*>(ids.data),
             static_cast<const std::uint8_t*>(weights.routed_gate_up.codes), nullptr, nullptr,

@@ -23,7 +23,7 @@ Weight bf16_weight(const DeviceBuffer& storage, int rows, int columns) {
     Weight out{};
     out.payload = out.qdata = storage.p;
     out.payload_bytes = storage.bytes;
-    out.qtype = QType::BF16_CTRL;
+    out.qtype = QType::BF16;
     out.layout = QuantLayout::Contiguous;
     out.n = out.shape[0] = out.padded_shape[0] = rows;
     out.k = out.shape[1] = out.padded_shape[1] = columns;
@@ -93,12 +93,12 @@ int run() {
         .shared_down = bf16_weight(d_shared_down, kHidden, kIntermediate),
         .shared_scale = bf16_weight(d_shared_scale, 1, kHidden),
         .routed_gate_up = {.codes = d_routed_gate_up.p,
-                           .qtype = QType::BF16_CTRL,
+                           .qtype = QType::BF16,
                            .experts = kExperts,
                            .rows = 2 * kIntermediate,
                            .columns = kHidden},
         .routed_down = {.codes = d_routed_down.p,
-                        .qtype = QType::BF16_CTRL,
+                        .qtype = QType::BF16,
                         .experts = kExperts,
                         .rows = kHidden,
                         .columns = kIntermediate},

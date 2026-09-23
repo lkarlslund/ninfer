@@ -4,7 +4,7 @@
 
 #include "core/device.h"
 #include "ninfer/ops/linear.h"
-#include "ops/linear/bf16/bf16_launch.h"
+#include "ops/linear/bf16/flash_next/bf16_launch.h"
 
 #include <cuda_bf16.h>
 #include <cuda_runtime.h>
@@ -346,9 +346,9 @@ void finish_mix(const Tensor& normalized, const HyperConnectionWeights& weights,
     Tensor low_rank = workspace.alloc(DType::BF16, {kRank, tokens});
     const bool fused_down_silu = tokens <= 16;
     if (tokens == 1) {
-        detail::launch_bf16_hc_down_silu_decode(normalized, weights.down, low_rank, stream);
+        detail::flash_next::launch_bf16_hc_down_silu_decode(normalized, weights.down, low_rank, stream);
     } else if (fused_down_silu) {
-        detail::launch_bf16_hc_down_silu_small_t(normalized, weights.down, low_rank, stream);
+        detail::flash_next::launch_bf16_hc_down_silu_small_t(normalized, weights.down, low_rank, stream);
     } else {
         linear(normalized, weights.down, low_rank, stream, bf16_gemm);
     }

@@ -1,4 +1,5 @@
 #pragma once
+#include "core/weight.h"
 
 #include "core/arena.h"
 #include "core/gdn_replay_records.h"

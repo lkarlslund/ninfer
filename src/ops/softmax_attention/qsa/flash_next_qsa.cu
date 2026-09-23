@@ -8,7 +8,7 @@
 #include "ninfer/ops/rope.h"
 #include "ninfer/ops/sigmoid_mul.h"
 #include "ops/softmax_attention/dense/causal_cache/prompt_common.cuh"
-#include "ops/linear/bf16/bf16_launch.h"
+#include "ops/linear/bf16/flash_next/bf16_launch.h"
 #include "ops/kv_cache/fp8_e4m3_row_codec.cuh"
 #include "ops/kv_cache/hadamard_d256.cuh"
 
@@ -1454,7 +1454,7 @@ __global__ void reduce_selected_attention_splits_kernel(
 }
 
 void require_weight(const Weight& weight, int n, int k, const char* label) {
-    if (weight.qtype != QType::BF16_CTRL || weight.layout != QuantLayout::Contiguous ||
+    if (weight.qtype != QType::BF16 || weight.layout != QuantLayout::Contiguous ||
         weight.qdata == nullptr || weight.n != n || weight.k != k) {
         throw std::invalid_argument(label);
     }
@@ -1529,7 +1529,7 @@ void flash_next_project_query_gate(const Tensor& input, const Weight& query_gate
     require_weight(query_gate, 12288, 2560,
                    "flash_next_project_query_gate: invalid packed weight");
     if (tokens == 1) {
-        detail::launch_bf16_query_gate_decode(input, query_gate, query, gate, stream);
+        detail::flash_next::launch_bf16_query_gate_decode(input, query_gate, query, gate, stream);
         return;
     }
     auto scope = workspace.scope();

@@ -7,7 +7,7 @@ artifact representation and conversion contract are defined in
 
 The target instantiates the independent `qwen3_8_flash_next` family runtime. That family owns its
 Frontend, prepared-prompt/output types, persistent state, Text/Vision/MTP schedules, workspace, and
-CUDA Graph machinery; it does not specialize the `qwen3_6` runtime. Closed mathematical kernels
+CUDA Graph machinery; it does not specialize the `qwen3_5` runtime. Closed mathematical kernels
 remain shared Ops where their semantic contracts genuinely coincide.
 
 ## Fixed dimensions

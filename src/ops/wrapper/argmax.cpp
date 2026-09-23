@@ -99,7 +99,7 @@ void shortlist_exact_argmax(const Tensor& hidden, const Tensor& approximate_logi
         out.ne[1] != 1 || out.ne[2] != 1 || out.ne[3] != 1) {
         throw std::invalid_argument("shortlist_exact_argmax: invalid tensor shape");
     }
-    if (exact_head.qtype != QType::BF16_CTRL || exact_head.layout != QuantLayout::Contiguous ||
+    if (exact_head.qtype != QType::BF16 || exact_head.layout != QuantLayout::Contiguous ||
         exact_head.k != hidden.ne[0] || exact_head.n <= 0 || exact_head.qdata == nullptr ||
         id_map == nullptr || hidden.data == nullptr || approximate_logits.data == nullptr ||
         candidate_ids.data == nullptr || candidate_scores.data == nullptr || out.data == nullptr) {
