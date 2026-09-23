@@ -19,6 +19,58 @@ client, stages the NVFP4 artifact once in `/dev/shm`, stores raw/progress/Serve 
 JSON, and CSV summaries. The case catalog, exact profiles, TTFT boundary, and fixture qualification
 are documented in the dedicated README.
 
+## Flash-Next paired serving and numerical diagnostics
+
+`run_flash_next_serving.py` measures fixed 8K/64K single requests, simultaneous pairs, a 64K
+prefill admitted during an 8K decode, and optional eight-turn paired conversations. Each case
+has one complete unmeasured warmup followed by five measured waves; the output limit defaults
+to 512 tokens and natural stops remain enabled. The server must support two active requests. Configure NInfer cold runs with
+`--no-prefix-reuse`; vLLM uses a fresh `cache_salt` per request. Run `--cases turns` separately
+with prefix reuse enabled. Use NInfer `--preserve-thinking` and vLLM
+`--reasoning-parser qwen3`; add vLLM `--enable-prompt-tokens-details` to retain per-request cache
+counts. Conversation histories preserve reasoning separately from content,
+and each conversation receives a distinct root and a stable salt.
+
+The `--contexts` JSON maps token lengths to decoded text. Produce it from the committed
+Flash-Next fixture using the matching local tokenizer (the tokenizer environment needs
+`transformers`; the measurement scripts themselves use Python 3.11's standard library):
+
+```python
+import json
+from pathlib import Path
+from transformers import AutoTokenizer
+
+tokenizer = AutoTokenizer.from_pretrained("/path/to/Flash-Next", local_files_only=True)
+ids = list(map(int, Path("bench/fixtures/qwen3_8_flash_next_context.ids").read_text().split()))
+Path("/tmp/flash-next-contexts.json").write_text(json.dumps({
+    str(n): tokenizer.decode(ids[:n]) for n in (1980, 2049, 8192, 65536)
+}))
+```
+
+```bash
+python3 tools/bench/run_flash_next_serving.py --url http://127.0.0.1:18087 \
+  --contexts /tmp/flash-next-contexts.json --output /tmp/baseline.jsonl
+python3 tools/bench/compare_flash_next_serving.py /tmp/baseline.jsonl /tmp/candidate.jsonl \
+  --output /tmp/comparison.json
+python3 tools/bench/check_flash_next_isolation.py --url http://127.0.0.1:18087 \
+  --contexts /tmp/flash-next-contexts.json --output /tmp/isolation.json
+```
+
+The comparator checks matched prompt/output lengths for cold workloads and output lengths for
+rolling conversations. Unequal output lengths invalidate a completion-time comparison; use
+actual token counts and cache/latency observations to describe such conversation runs. It
+bootstraps paired wave completion-time ratios; conversation turns
+remain grouped by repetition. Its timing gate requires a 2% gain with a positive 95% interval
+on a concurrent workload, no single-request regression above 2%, and no mean TTFT/ITL regression
+above 5%. Confidence intervals describe these repeated fixtures, not variation across arbitrary
+prompts. Stream gaps are delivery gaps, not individual device-token latencies. The isolation
+probe checks public-label recall across different request lengths and reversed admission order;
+this behavioral probe complements numerical/state tests and is not a mathematical oracle.
+
+`compare_flash_next_scores.py` compares `ninfer-perplexity --token-scores` output with vLLM
+causal prompt scores using identical token IDs. See [perplexity](../../docs/perplexity.md) and
+[Flash-Next numerical diagnostics](../../docs/maintainer/qwen3.8-flash-next-125b-a6b-model.md#numerical-diagnostics).
+
 ## Corpus baker
 
 `ninfer_bench` benchmarks prefill at an exact length by slicing the first `P` token ids of a

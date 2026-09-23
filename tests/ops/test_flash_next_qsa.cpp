@@ -318,6 +318,14 @@ int run(int kPrefillTokens) {
         store_bf16(d_k_pages, base + 255, 0.125F * (position % 7 - 3));
         store_bf16(d_v_pages, base, 0.125F * (position % 11 - 5));
     }
+    // Different signed query/gate inputs catch a query tile reading another row's data.
+    const auto query_input = [](int token) {
+        return (token % 2 == 0 ? 1.0F : -1.0F) * (0.375F + 0.125F * (token % 3));
+    };
+    for (int token = 0; token < kPrefillTokens; ++token) {
+        store_bf16(d_prefill_input, static_cast<std::size_t>(token) * kHidden,
+                   query_input(token));
+    }
     const int active = kPrefillTokens - 1;
     d_prefill_valid.copy_from_host(&active, sizeof(active));
     for (int pattern = 0; pattern < 3; ++pattern) {
@@ -332,13 +340,15 @@ int run(int kPrefillTokens) {
                 selected[2051 * token + slot] = position;
                 const double key = 0.125 * (position % 7 - 3);
                 const double value = 0.125 * (position % 11 - 5);
-                const double q = 1.0 / std::sqrt(1.0 / 256.0 + 1.0e-6);
+                const double projected_query = 2.0 * query_input(token);
+                const double q = projected_query /
+                    std::sqrt(projected_query * projected_query / 256.0 + 1.0e-6);
                 const double probability = std::exp(q * key / 16.0);
                 numerator += probability * value;
                 denominator += probability;
             }
             oracle[static_cast<std::size_t>(token) * kHidden] =
-                numerator / denominator / (1.0 + std::exp(-1.0));
+                numerator / denominator / (1.0 + std::exp(-2.0 * query_input(token)));
         }
         DeviceBuffer d_selected = to_device_i32(selected);
         Tensor selected_tensor(d_selected.p, DType::I32, {2051, kPrefillTokens});

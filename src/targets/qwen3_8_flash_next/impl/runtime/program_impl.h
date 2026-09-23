@@ -3,6 +3,7 @@
 #include "targets/qwen3_8_flash_next/impl/runtime/rebuild_work.h"
 
 #include "core/nvtx.h"
+#include "targets/qwen3_8_flash_next/impl/runtime/diagnostics.h"
 #include "core/startup.h"
 #include "targets/qwen3_8_flash_next/impl/runtime/schedule.h"
 #include "ninfer/ops/gdn_replay.h"
@@ -9238,6 +9239,14 @@ CommitResult ProgramImplCore::commit(PendingBatch&& pending,
                     out.rows[row].timings     = requests[lanes[row]].timings;
                     out.rows[row].speculative = requests[lanes[row]].speculative_stats;
                 }
+            }
+
+            if (!decisions[row].cancelled) {
+                const auto& sequence = active_sequence(lanes[row]);
+                qwen3_8_flash_next::detail::capture_committed_state(
+                    speculative_backend == SpeculativeBackend::Mtp ? "mtp" : "ordinary",
+                    state_images->linear(), state_store->physical_slot(sequence.state.read),
+                    lanes[row], sequence.execution_frontier, sequence.ledger, device.stream);
             }
 
             if (pending_kinds[row] != PendingKind::Begin || decisions[row].cancelled) { continue; }

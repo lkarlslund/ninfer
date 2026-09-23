@@ -69,3 +69,11 @@ The corpus name is a workload scale, not an exact token count. Exact input and s
 are runtime results from the current artifact tokenizer and are recorded in each report. Reports
 contain unrounded NLL/PPL values for every window, stream, domain, and the token-weighted overall
 aggregate.
+
+For fixed-token comparisons with another runtime, add `--token-scores`. This writes
+`token_scores.jsonl` with each stream/window, absolute token position, token ID, and natural-log
+probability. The report also retains each window's exact input IDs. This opt-in export does not
+change scoring or aggregate perplexity. `tools/bench/compare_flash_next_scores.py` compares that
+report against vLLM prompt scores, optionally caching responses with `--responses` so the two
+engines can run sequentially on one GPU. Cross-engine disagreement is diagnostic evidence, not
+an automatic correctness verdict.

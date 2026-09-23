@@ -1,5 +1,6 @@
 #include "targets/qwen3_8_flash_next/impl/runtime/instance.h"
 #include "targets/qwen3_8_flash_next/impl/runtime/text_context.h"
+#include "targets/qwen3_8_flash_next/impl/runtime/diagnostics.h"
 #include "targets/qwen3_8_flash_next/impl/runtime/workspace_recipe.h"
 
 #include "core/nvtx.h"
@@ -874,6 +875,8 @@ void TextContext::ordinary_decode_batch(const Tensor& ids, const Tensor& cache_p
             ops::rmsnorm(x, *final_norm_, kCfg.rms_eps, true, hidden, stream);
         }
         ops::linear(hidden, *lm_head_, logits, stream, bf16_gemm_);
+        qwen3_8_flash_next::detail::capture_target_logits("ordinary", ids, cache_positions, nullptr,
+                                                          kv_table_rows, logits, stream);
     }
     work_.reset();
 }
@@ -939,6 +942,8 @@ void TextContext::target_verify_batch_impl(const Tensor& ids, const Tensor& cach
             ops::rmsnorm(x, *final_norm_, kCfg.rms_eps, true, flat_hidden, stream);
         }
         ops::linear(flat_hidden, *lm_head_, flat_logits, stream, bf16_gemm_);
+        qwen3_8_flash_next::detail::capture_target_logits(
+            "verify", ids, cache_positions, &valid_columns, kv_table_rows, flat_logits, stream);
         ops::argmax(flat_logits, flat_tokens, kCfg.token_domain, stream);
     }
     work_.reset();

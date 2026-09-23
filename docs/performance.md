@@ -34,6 +34,105 @@ single-request MTP3 results below.
 
 ## Qwen3.8 Flash-Next 125B-A6B versus vLLM
 
+### Paired serving qualification, September 2026
+
+The September 22 campaign uses one RTX PRO 6000 Blackwell 96 GB at 450 W, driver 610.43.03,
+CUDA 13.3, sm_120a, and the same represented RadixArk NVFP4 text weights in both engines.
+The NInfer artifact's additional Q4/Q5 inventory concerns Vision and the optional proposal head;
+it is not a different quantization of the main text model. The isolated vLLM checkout is
+`c42f5285ec9851dacfa370e163e7837e87fd7b6d` with its matching CUDA wheel, Torch 2.13.0+cu130,
+FlashInfer CUTLASS NVFP4 MoE, Marlin linear projections, and CPU-offloaded PLE.
+
+Both servers permit two active requests, use CUDA Graphs, a 73,728-token request limit, 8,192-token
+prefill chunks/budget, BF16 KV unless stated otherwise, greedy generation, and a 512-token output limit.
+NInfer reserves 147,456 KV tokens. Single-request measurements use that same two-request server
+configuration. Cold-prefix workloads have one complete unmeasured warm wave per case followed by
+five measured waves; file-backed PLE is warm. NInfer disables prefix reuse, while vLLM isolates
+requests with distinct cache salts. The 8K/64K fixture produces 8,277/65,620 prompt tokens after
+chat formatting. The mixed case admits a 64K request after the 8K request begins streaming.
+All cold requests reach 512 output tokens. Eight-turn paired conversations are separate
+cache-enabled runs and preserve reasoning history. Their NInfer cache has four Device state
+slots, eight Host state slots, and 4 GiB of Host KV; vLLM uses its default prefix-cache policy.
+Natural stops remain enabled: NInfer's HTTP API has no minimum-output control. Conversation output lengths can differ, so their completion
+times are descriptive and excluded from the fixed-output speedup gate.
+
+The acceptance rule is at least 2% lower paired completion time with a paired-bootstrap 95%
+interval above zero, no single-request slowdown above 2%, and no mean TTFT/ITL regression above
+5%. The intervals describe repeated fixed fixtures, not a population of arbitrary prompts.
+The [paired serving tools](../tools/bench/README.md#flash-next-paired-serving-and-numerical-diagnostics)
+retain completion time, TTFT, mean ITL, stream gaps, actual token counts, and response content.
+Earlier runs that inadvertently reused prefixes, lacked a complete warm wave, or flattened
+reasoning history are excluded from qualification comparisons.
+
+Mean end-to-end completion time in seconds (five measured waves, lower is better):
+
+| Workload | NInfer MTP0 | NInfer MTP3 full | NInfer MTP3 optimized | vLLM MTP0 | vLLM MTP3 |
+|---|---:|---:|---:|---:|---:|
+| 8K single | 6.123 | 3.859 | 3.521 | 5.773 | 3.967 |
+| 8K pair | 7.825 | 5.718 | 5.304 | 7.496 | 4.963 |
+| 64K single | 12.397 | 10.524 | 9.915 | 10.510 | 8.567 |
+| 64K pair | 20.288 | 18.844 | 18.202 | 16.949 | 14.674 |
+| Mixed 8K/64K | 14.193 | 12.471 | 12.041 | 12.405 | 10.040 |
+
+The existing `--spec mtp --draft-tokens 3 --lm-head-draft` profile passes the five cold-workload
+acceptance gates against the full proposal head. Completion time falls 7.24% for 8K pairs
+(95% interval 6.98–7.50%), 3.41% for 64K pairs (2.90–3.87%), and 3.44% for mixed requests
+(3.41–3.49%). Single requests improve 8.75% at 8K and 5.78% at 64K; mean TTFT and ITL also
+improve. This is qualification of an existing option, not a new kernel speedup. The approximate
+head only proposes tokens; the unchanged full target head verifies them. The real Engine test
+covers both full and optimized heads, including prefix rollback and concurrent lane reuse.
+
+In five eight-turn paired conversations, mean follow-up TTFT is 155.8 ms without speculation,
+182.1 ms with the full MTP3 proposal head, and 181.7 ms with the optimized head. Mean per-request
+ITL is 12.20/8.01/7.24 ms respectively. Actual response lengths span 172–512, 263–512, and
+235–512 tokens, so these conversation observations do not qualify a completion-time speedup.
+The corrected histories reuse generated prefixes (typically about 99.6% cached on follow-ups),
+and the optimized head does not show a cache-response latency regression in this run.
+
+The current vLLM conversation runs average 260.3 ms follow-up TTFT without speculation and
+513.3 ms with MTP3; response lengths span 187–512 and 94–512 tokens respectively. Its selected
+attention block sizes are 1,568/1,600 tokens to align attention and recurrent cache pages. MTP3
+reports a mean 7,474 cached tokens per follow-up, whereas NInfer's private continuations typically
+leave only about 35–39 prompt tokens to compute. This cache-policy distinction matters when
+interpreting latency; the rolling histories also differ with each engine's generated responses.
+The MTP0 reference did not expose per-response cache counts, but server counters confirm hits
+in conversations and zero hits in the cold matrix. MTP3 enables `--enable-prompt-tokens-details`.
+
+Sequential candidate decisions:
+
+| Candidate | Evidence | Decision |
+|---|---|---|
+| [QSA output-gate fusion](https://github.com/vllm-project/vllm/pull/55309) preserving the BF16 attention boundary | Independent QSA oracle and real Engine test pass; 8K pair slows 2.6%, 64K pair improves only 0.06%; 64K single slows 2.4% | Reverted |
+| [True query-union QSA](https://github.com/vllm-project/vllm/pull/55430), tiles of 2/4/8 queries | Independent per-query oracle passes for overlapping/disjoint selections, holes and inactive rows. Refined two-query route passes real Engine and isolation tests, but full qualification gives only 1.5% faster 64K pairs and 8.7% slower 8K singles | Reverted |
+| [Small-token GDN projection](https://github.com/vllm-project/vllm/pull/57318) | Existing native fused projection/control takes 2.1–2.8 µs at 2/4/8 tokens; the tested library projection alone takes about 9.1–9.2 µs | Keep existing native route |
+| Sorted/deduplicated PLE reads | Exact gathered bytes match. At 64K, cold `pread` improves about 1.28 to 1.25 s, but warm gather grows from 9.3 to 70 ms; sorted mmap also loses warm | Keep existing mmap gather |
+| Existing FP8 KV profile | One warmed paired screen: 8K 5.845 s versus BF16 5.718 s; 64K 18.997 s versus 18.843 s. Saves about 1.82 GiB at the same 147,456-token capacity | Keep BF16 for speed; FP8 remains a capacity option |
+
+The union prototype builds a compact union with per-query membership bits, stages each union K/V
+once, and maintains separate softmax state. Its final one-warp-per-query layout removes the first
+prototype's occupancy penalty. A one-wave screen suggested about 9% lower 64K paired time; the
+full workload did not reproduce that gain. Its improved NLL on the small scoring sample does not
+rescue the failed serving acceptance gate. No rejected kernel, environment selector, or extra
+union workspace remains in the runtime.
+
+Numerical qualification includes the independent HyperConnection, PLE, QSA, GDN, replay, and MoE
+Op tests, plus real Text/Vision/MTP/prefix rollback and two-lane Engine checks. Public-label probes
+cover prompts below and above the sparse-selection boundary, 8K/64K mixed lengths, and reversed
+admission order. Matching single/concurrent MTP captures have exactly equal committed GDN tensors
+at the tested frontier. Ordinary and MTP state arithmetic is not bit-identical: one matched
+frontier has a 2.42% relative RMS recurrent-state difference. This is diagnostic evidence, not
+proof of an incorrect state transition.
+
+The fixed-history scoring comparison uses 8,192 WikiText targets with identical input token IDs
+and BF16 KV. NInfer NLL/PPL is 0.637672/1.892070 versus vLLM 0.597365/1.8173. Mean absolute
+log-probability disagreement is 0.2486 nats; 7.80% of positions differ by more than one nat.
+The engines therefore cannot be called numerically equivalent, and neither engine is a
+mathematical oracle. No confirmed model/state bug was established by this campaign. Retained
+fixed-token score export and opt-in target-logit/committed-GDN diagnostics support further
+localization; they do not establish a general quality ranking.
+
+### Earlier single-request throughput profile
+
 The Flash-Next campaign measures one request on an NVIDIA RTX PRO 6000 Blackwell Workstation
 Edition (96 GiB), CUDA compile/runtime and driver 13.3, BF16 KV, an 8,192-token NInfer prefill
 chunk, CUDA Graph decode, greedy selection, and 512 generated tokens. The maximum prompt is

@@ -13,15 +13,15 @@ ninfer::EngineOptions engine_options(const char* artifact) {
     ninfer::EngineOptions options;
     options.artifact_path                    = artifact;
     options.max_context                      = 512;
-    options.kv_capacity                      = ninfer::KvCapacityPolicy::explicit_capacity(512);
+    options.kv_capacity                      = ninfer::KvCapacityPolicy::explicit_capacity(1024);
     options.prefill_chunk                    = 256;
     options.speculative.backend              = ninfer::SpeculativeBackend::Mtp;
     options.speculative.draft_tokens         = 3;
     options.speculative.proposal_head        = ninfer::ProposalHead::Full;
     options.enable_vision                    = true;
     options.use_cuda_graph                   = true;
-    options.max_concurrency                  = 1;
-    options.max_pending_requests             = 1;
+    options.max_concurrency                  = 2;
+    options.max_pending_requests             = 2;
     options.context_cache.device_state_slots = 4;
     options.context_cache.max_private_continuations = 2;
     options.context_cache.max_shared_prefixes       = 1;
@@ -155,6 +155,41 @@ int exercise_ordinary_greedy(const char* artifact) {
     return 0;
 }
 
+int exercise_concurrent_state(ninfer::Engine& engine) {
+    // Different frontiers exercise local prefill rows and shared decode rows. Repeat in
+    // reversed admission order to reuse both physical lanes and recurrent state slots.
+    auto continuation = canonical_prompt();
+    continuation.insert(continuation.end(), canonical_output().begin(),
+                        canonical_output().begin() + 4);
+    const auto cold =
+        engine.generate(engine.prepare_tokens(continuation), greedy_options(8, false));
+    const auto before = engine.runtime_stats();
+    for (bool reverse : {false, true}) {
+        auto first =
+            engine.submit(engine.prepare_tokens(reverse ? continuation : canonical_prompt()),
+                          greedy_options(reverse ? 8 : 12, false));
+        auto second =
+            engine.submit(engine.prepare_tokens(reverse ? canonical_prompt() : continuation),
+                          greedy_options(reverse ? 12 : 8, false));
+        const auto a        = first.wait();
+        const auto b        = second.wait();
+        const auto& root    = reverse ? b : a;
+        const auto& resumed = reverse ? a : b;
+        if (root.generated_token_ids != canonical_output() ||
+            resumed.generated_token_ids != cold.generated_token_ids) {
+            std::cerr << "Flash-Next concurrent lane reuse changed the canonical fixture\n";
+            return 1;
+        }
+    }
+    const auto after = engine.runtime_stats();
+    if (after.decode_row_rounds - before.decode_row_rounds <=
+        after.decode_rounds - before.decode_rounds) {
+        std::cerr << "Flash-Next concurrent fixture never executed a two-row decode\n";
+        return 1;
+    }
+    return 0;
+}
+
 int exercise_vision(ninfer::Engine& engine) {
     ninfer::MessagePart image;
     image.kind              = ninfer::MessagePartKind::Media;
@@ -188,8 +223,10 @@ int main() {
     const char* artifact = std::getenv("NINFER_QWEN38_FLASH_NEXT_WEIGHTS");
     if (artifact == nullptr || *artifact == '\0') { return 77; }
     try {
-        {
-            ninfer::Engine engine(engine_options(artifact));
+        for (const auto head : {ninfer::ProposalHead::Full, ninfer::ProposalHead::Optimized}) {
+            auto options = engine_options(artifact);
+            options.speculative.proposal_head = head;
+            ninfer::Engine engine(options);
             const ninfer::LoadSummary load = engine.load_summary();
             if (load.target != "qwen3_8_flash_next_125b_a6b" || load.weights_id != "nvfp4" ||
                 load.host_to_device_bytes == 0 || load.file_backed_bytes == 0) {
@@ -197,6 +234,7 @@ int main() {
                 return 1;
             }
             if (exercise_mtp_and_prefix(engine) != 0) { return 1; }
+            if (exercise_concurrent_state(engine) != 0) { return 1; }
             if (exercise_vision(engine) != 0) { return 1; }
         }
         if (exercise_ordinary_greedy(artifact) != 0) { return 1; }

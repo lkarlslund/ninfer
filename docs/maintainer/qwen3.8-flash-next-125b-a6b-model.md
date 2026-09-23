@@ -84,3 +84,25 @@ and recurrent state are FP32. PLE table values are FP8 E4M3FN multiplied by the 
 scale. Production fusion may choose its reduction and staging precision, but each closed Op is
 qualified directly against an independent mathematical oracle at its public output and persistent
 state boundaries.
+
+## Numerical diagnostics
+
+`ninfer-perplexity --token-scores` exports fixed-history token log-probabilities through the public
+Engine scoring route; see [perplexity](../perplexity.md). Cross-engine score differences alone do
+not identify an incorrect operator.
+
+For a targeted maintainer investigation, `NINFER_FLASH_NEXT_LOGITS_DIR=<directory>` captures full
+BF16 target logits after ordinary decode and MTP verification. Use `--no-cuda-graph`: synchronous
+host copies are prohibited inside capture. Each numbered JSON file identifies the route, input
+IDs, positions, active columns, KV rows, vocabulary size, width, and batch; the matching `.bf16`
+file stores contiguous vocabulary-major rows. Verification includes tentative columns, so compare
+only matching token histories and valid columns, not arbitrary rows at the same position.
+
+`NINFER_FLASH_NEXT_STATE_DIR=<directory>` together with
+`NINFER_FLASH_NEXT_STATE_FRONTIER=<execution-token-count>` captures the committed GDN convolution
+and recurrent tensors at exactly that frontier, after any speculative rollback. JSON records the
+route, lane, physical slot, and ledger. Layer files retain BF16 convolution and FP32 recurrent
+values. This is a GDN diagnostic, not a complete continuation snapshot: KV, PLE, and predictor state
+are not included. A single dump is approximately 110 MiB; choose a short, specific fixture.
+Both diagnostics are disabled when their environment variables are absent, and their timings must
+not be used for performance claims.
