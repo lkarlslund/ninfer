@@ -22,7 +22,6 @@ The existing 2% single-request and 5% latency regression guards pass. This migra
 pass the separate optimization gate requiring a 2% concurrent speedup, and is not advertised as
 a performance improvement. The comparison uses the saved pre-migration binary rather than a v2
 rebuild with the new compiler; code, toolchain and run-order effects are not separated.
-The working v3 migration remains on its branch; production retains the v2 baseline.
 
 Reproduce the serving matrix with `tools/bench/run_flash_next_serving.py --repetitions 3` and
 compare with `tools/bench/compare_flash_next_serving.py`. Local results are under
